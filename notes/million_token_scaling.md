@@ -32,7 +32,11 @@ The learned compressed-ranker test gives the first strong positive signal after 
 
 The held-out text test preserved the signal. Training on one 8192-token stream and evaluating on a reversed 8192-token stream reached `0.749752` aggregate top-16 recall at a 256-candidate verifier budget and `0.835488` at a 512-candidate budget.
 
-The working conclusion is now sharper: the broad SVA socket works, and the next invention has to be the address code. Million-token retrieval needs a richer compressed catalog than random binary addresses, and a learned low-rank Q/K score is now the first useful catalog target.
+The learned-score LSH serving test answered the next question. Random-hyperplane LSH over the rank-64 Q/K space reached only `0.233429` aggregate top-16 recall in its best row, while projecting to about `38.6k` average candidates at a million-token context. In the rough few-hundred-candidate band, aggregate recall stayed around `0.013`.
+
+The score-aware IVF serving test improved the tradeoff. Single-write k-means centroids over learned low-rank keys reached `0.234422` recall at about `3.5k` projected million-token candidates, and about `0.095-0.102` recall in the few-hundred-candidate band. That is a large gain over sign-LSH at the same candidate scale, but still well below the learned ranker's all-key score.
+
+The working conclusion is now sharper: the broad SVA socket works, and the learned low-rank Q/K score works as a compact ranking signal. Million-token retrieval needs a richer compressed catalog than random binary addresses, random sign buckets, or single-write unsupervised centroids.
 
 ## Million-Token Constraint
 
@@ -74,7 +78,7 @@ The likely million-token shape is a three-stage SVA stack:
    - Rank within the summoned set before exact QK.
    - Use structure from the model rather than a fresh random projection.
    - Current best target: learned low-rank Q/K projection.
-   - Good serving candidates: learned binary code over the low-rank space, product-quantized QK, or an ANN index over compressed keys.
+   - Good serving candidates: multi-write centroid routing, supervised routing cells, product-quantized QK, or an ANN index over compressed keys.
 
 3. Exact verifier
    - Run full QK only over the reduced candidate set.
@@ -91,7 +95,7 @@ So the next invention target is the cheap ranker. The summon stage already finds
 The next architectural test is sublinear serving for the learned ranker:
 
 - keep the exact verifier unchanged
-- convert the rank-64 score into a true addressable lookup
-- test product-quantized keys, learned binary codes, or multi-probe ANN
+- convert the rank-64 score into a true addressable lookup without random sign buckets or single-write cells
+- test multi-write centroid routing, supervised routing cells, product-quantized asymmetric scoring, or multi-probe ANN
 - keep the target at top-16 recall above `0.75` and verifier budget at or below `512`
 - rerun the million-token pressure simulation with empirical candidate density

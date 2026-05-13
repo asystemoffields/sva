@@ -58,6 +58,10 @@ The learned compressed-ranker test is the first strong follow-up. Training a sma
 
 The held-out text test preserved the signal. Training on one 8192-token stream and evaluating on a reversed 8192-token stream reached aggregate top-16 recall `0.749752` with rank 64 and 256 verifier candidates, and `0.835488` with 512 verifier candidates. The next invention target is sublinear lookup for that learned compact score.
 
+The first learned-score serving attempt tested random-hyperplane LSH over the rank-64 space. It is a kill for that specific lookup geometry. The strongest aggregate row reached only `0.233429` verified top-16 recall while projecting to about `38.6k` average candidates at a million-token context; in the rough few-hundred-candidate band, recall stayed around `0.013`.
+
+Score-aware IVF routing improved the serving shape. Single-write k-means centroids over learned low-rank keys reached `0.234422` recall at about `3.5k` projected million-token candidates, and about `0.095-0.102` recall in the few-hundred-candidate band. That is much better than sign-LSH at the same scale, but still far below the learned ranker's all-key recall. The next target is multi-write or supervised routing: give each key more than one good way to be summoned, or train the catalog cells directly against top-key recall.
+
 ## Files
 
 - `experiments/sva_kill_test.py`: standalone toy benchmark.
@@ -67,12 +71,16 @@ The held-out text test preserved the signal. Training on one 8192-token stream a
 - `experiments/sva_real_qk_address_sweep.py`: real-QK high-bit address sweep at the model's configured context window.
 - `experiments/sva_million_stream_sim.py`: million-token address-pressure simulation from real SmolLM2 8192-token Q/K samples.
 - `experiments/sva_learned_ranker_test.py`: learned compressed Q/K ranker test.
+- `experiments/sva_learned_lsh_lookup_test.py`: learned-ranker random-hyperplane LSH serving test.
+- `experiments/sva_learned_ivf_lookup_test.py`: learned-ranker IVF/centroid routing serving test.
 - `experiments/sva_address_scaling.py`: address selectivity calculator for long contexts.
 - `modal_h100_trainable.py`: Modal H100 runner for the trainable benchmark.
 - `modal_h100_socket.py`: Modal H100 runner for the pretrained socket sweep.
 - `modal_h100_million_stream.py`: Modal H100 runner for the million-token address-pressure simulation.
 - `modal_h100_learned_ranker.py`: Modal H100 runner for the learned compressed-ranker test.
 - `modal_h100_learned_ranker_generalize.py`: Modal H100 runner for the held-out-text ranker test.
+- `modal_h100_learned_lsh_lookup.py`: Modal H100 runner for learned-ranker LSH serving.
+- `modal_h100_learned_ivf_lookup.py`: Modal H100 runner for learned-ranker IVF serving.
 - `scripts/start_modal_h100_background.ps1`: detached Modal launcher that writes run logs under `results/modal_runs/`.
 - `results/verification_snapshot_2026-05-13.md`: current kill-test results.
 - `results/trainable_recall_snapshot_2026-05-13.md`: H100 trainable-representation checkpoint.
@@ -83,6 +91,8 @@ The held-out text test preserved the signal. Training on one 8192-token stream a
 - `results/million_stream_snapshot_2026-05-13.md`: million-token address-pressure snapshot.
 - `results/learned_ranker_snapshot_2026-05-13.md`: learned compressed-ranker snapshot.
 - `results/learned_ranker_generalization_snapshot_2026-05-13.md`: held-out-text learned ranker snapshot.
+- `results/learned_lsh_lookup_snapshot_2026-05-13.md`: learned-ranker LSH lookup snapshot.
+- `results/learned_ivf_lookup_snapshot_2026-05-13.md`: learned-ranker IVF lookup snapshot.
 - `notes/attention_replacement_findings.md`: broader research log leading to SVA.
 - `notes/million_token_scaling.md`: scaling target for million-token contexts.
 
@@ -94,6 +104,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_bac
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-million-stream -ModalFile modal_h100_million_stream.py
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-learned-ranker -ModalFile modal_h100_learned_ranker.py
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-learned-ranker-generalize -ModalFile modal_h100_learned_ranker_generalize.py
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-learned-lsh-lookup -ModalFile modal_h100_learned_lsh_lookup.py
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-learned-ivf-lookup -ModalFile modal_h100_learned_ivf_lookup.py
 ```
 
 The launcher uses `modal run --detach` and writes local metadata, stdout, stderr, and result files under `results/modal_runs/`.
