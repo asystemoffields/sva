@@ -87,6 +87,7 @@ The first synthetic million-token throughput check is plausible but still costly
 - `experiments/sva_supervised_query_router_test.py`: learned-ranker supervised query-cell router serving test.
 - `experiments/sva_pq_lookup_test.py`: product-quantized learned-ranker lookup test.
 - `experiments/sva_pq_scan_benchmark.py`: synthetic million-token PQ scan throughput benchmark.
+- `experiments/sva_coarse_to_fine_pq_test.py`: coarse-to-fine product-quantized lookup test.
 - `experiments/sva_address_scaling.py`: address selectivity calculator for long contexts.
 - `modal_h100_trainable.py`: Modal H100 runner for the trainable benchmark.
 - `modal_h100_socket.py`: Modal H100 runner for the pretrained socket sweep.
@@ -100,6 +101,7 @@ The first synthetic million-token throughput check is plausible but still costly
 - `modal_h100_supervised_query_router_hires.py`: Modal H100 runner for high-resolution supervised query-cell router serving.
 - `modal_h100_pq_lookup.py`: Modal H100 runner for product-quantized learned-ranker lookup.
 - `modal_h100_pq_scan_benchmark.py`: Modal H100 runner for PQ scan throughput.
+- `modal_h100_coarse_to_fine_pq.py`: Modal H100 runner for coarse-to-fine PQ lookup.
 - `scripts/start_modal_h100_background.ps1`: detached Modal launcher that writes run logs under `results/modal_runs/`.
 - `results/verification_snapshot_2026-05-13.md`: current kill-test results.
 - `results/trainable_recall_snapshot_2026-05-13.md`: H100 trainable-representation checkpoint.
@@ -135,6 +137,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_bac
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-supervised-query-router-hires -ModalFile modal_h100_supervised_query_router_hires.py
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-pq-lookup -ModalFile modal_h100_pq_lookup.py
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-pq-scan-benchmark -ModalFile modal_h100_pq_scan_benchmark.py
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-coarse-to-fine-pq -ModalFile modal_h100_coarse_to_fine_pq.py
 ```
 
 The launcher uses `modal run --detach` and writes local metadata, stdout, stderr, and result files under `results/modal_runs/`.
