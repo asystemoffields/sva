@@ -38,7 +38,9 @@ The score-aware IVF serving test improved the tradeoff. Single-write k-means cen
 
 The multi-write IVF follow-up narrowed the branch. Giving each key several nearest-centroid writes reached `0.105422` recall at about `898` projected million-token candidates and `0.147647` at about `1,564` projected candidates. Those rows are close to, or below, comparable single-write IVF rows. The useful conclusion is that unsupervised centroid geometry is not the missing catalog by itself.
 
-The working conclusion is now sharper: the broad SVA socket works, and the learned low-rank Q/K score works as a compact ranking signal. Million-token retrieval needs a richer compressed catalog than random binary addresses, random sign buckets, or unsupervised centroid routing.
+The first supervised query-cell router showed that direct top-key supervision can move recall, reaching `0.655816` at about `167k` projected million-token candidates. The low-resolution cells were too dense: the smallest setting reached only `0.039109` recall at about `3.7k` projected candidates. The next version needs high-resolution cells and smaller write/probe settings.
+
+The working conclusion is now sharper: the broad SVA socket works, and the learned low-rank Q/K score works as a compact ranking signal. Million-token retrieval needs a richer compressed catalog than random binary addresses, random sign buckets, unsupervised centroid routing, or low-resolution supervised cells.
 
 ## Million-Token Constraint
 
@@ -80,7 +82,7 @@ The likely million-token shape is a three-stage SVA stack:
    - Rank within the summoned set before exact QK.
    - Use structure from the model rather than a fresh random projection.
    - Current best target: learned low-rank Q/K projection.
-   - Good serving candidates: supervised routing cells, product-quantized QK, or an ANN index over compressed keys.
+   - Good serving candidates: high-resolution supervised routing cells, product-quantized QK, or an ANN index over compressed keys.
 
 3. Exact verifier
    - Run full QK only over the reduced candidate set.
@@ -98,6 +100,6 @@ The next architectural test is sublinear serving for the learned ranker:
 
 - keep the exact verifier unchanged
 - convert the rank-64 score into a true addressable lookup without random sign buckets or unsupervised centroid cells
-- test supervised routing cells, product-quantized asymmetric scoring, or multi-probe ANN
+- test high-resolution supervised routing cells, product-quantized asymmetric scoring, or multi-probe ANN
 - keep the target at top-16 recall above `0.75` and verifier budget at or below `512`
 - rerun the million-token pressure simulation with empirical candidate density

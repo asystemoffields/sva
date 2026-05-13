@@ -64,6 +64,8 @@ Score-aware IVF routing improved the serving shape. Single-write k-means centroi
 
 Multi-write IVF answered the first half of that branch. Giving each key `2,4,8` nearest-centroid writes modestly improved some local settings, but the best few-hundred to low-thousand candidate row reached `0.105422` recall at about `898` projected million-token candidates, close to single-write IVF's `0.102477` recall at about `783`. The highest-recall multi-write row reached `0.147647` at about `1,564` projected candidates, below single-write IVF's `0.166574` at about `1,666`. The current target is supervised routing or asymmetric compressed scoring: make the catalog optimize for top-key recall directly.
 
+The first supervised query-cell router confirms that supervised routing can move recall, but the low-resolution cells are too dense. It reached `0.655816` aggregate recall at about `167k` projected million-token candidates, while the smallest setting reached only `0.039109` recall at about `3.7k` projected candidates. The next run raises the cell count to test whether the supervised signal survives in the `128-1024` projected-candidate band.
+
 ## Files
 
 - `experiments/sva_kill_test.py`: standalone toy benchmark.
@@ -87,6 +89,7 @@ Multi-write IVF answered the first half of that branch. Giving each key `2,4,8` 
 - `modal_h100_learned_ivf_lookup.py`: Modal H100 runner for learned-ranker IVF serving.
 - `modal_h100_learned_multiwrite_ivf_lookup.py`: Modal H100 runner for learned-ranker multi-write IVF serving.
 - `modal_h100_supervised_query_router.py`: Modal H100 runner for supervised query-cell router serving.
+- `modal_h100_supervised_query_router_hires.py`: Modal H100 runner for high-resolution supervised query-cell router serving.
 - `scripts/start_modal_h100_background.ps1`: detached Modal launcher that writes run logs under `results/modal_runs/`.
 - `results/verification_snapshot_2026-05-13.md`: current kill-test results.
 - `results/trainable_recall_snapshot_2026-05-13.md`: H100 trainable-representation checkpoint.
@@ -100,6 +103,7 @@ Multi-write IVF answered the first half of that branch. Giving each key `2,4,8` 
 - `results/learned_lsh_lookup_snapshot_2026-05-13.md`: learned-ranker LSH lookup snapshot.
 - `results/learned_ivf_lookup_snapshot_2026-05-13.md`: learned-ranker IVF lookup snapshot.
 - `results/learned_multiwrite_ivf_lookup_snapshot_2026-05-13.md`: learned-ranker multi-write IVF lookup snapshot.
+- `results/supervised_query_router_snapshot_2026-05-13.md`: supervised query-cell router lookup snapshot.
 - `notes/attention_replacement_findings.md`: broader research log leading to SVA.
 - `notes/million_token_scaling.md`: scaling target for million-token contexts.
 
@@ -115,6 +119,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_bac
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-learned-ivf-lookup -ModalFile modal_h100_learned_ivf_lookup.py
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-learned-multiwrite-ivf-lookup -ModalFile modal_h100_learned_multiwrite_ivf_lookup.py
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-supervised-query-router -ModalFile modal_h100_supervised_query_router.py
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-supervised-query-router-hires -ModalFile modal_h100_supervised_query_router_hires.py
 ```
 
 The launcher uses `modal run --detach` and writes local metadata, stdout, stderr, and result files under `results/modal_runs/`.
