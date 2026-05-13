@@ -42,7 +42,9 @@ The first supervised query-cell router showed that direct top-key supervision ca
 
 The high-resolution supervised router reached the target density but lost the signal. In the `128-1024` projected-candidate band, recall was only about `0.002-0.013`. At about `3.6k` projected candidates, recall was `0.042721`, far below single-write IVF's `0.234422` at a similar candidate count.
 
-The working conclusion is now sharper: the broad SVA socket works, and the learned low-rank Q/K score works as a compact ranking signal. Million-token retrieval needs a richer compressed catalog than random binary addresses, random sign buckets, unsupervised centroid routing, or supervised query-cell routing.
+Product-quantized learned-score lookup is the first strong serving result after the learned ranker. The exact learned rank-64 scorer reached `0.754046` recall at a 256-candidate verifier budget and `0.839084` at 512. PQ with `16 subspaces / 256 codewords` reached `0.704985` at 256 and `0.803184` at 512. A more compact `8 subspaces / 256 codewords` version reached `0.647166` at 256 and `0.755937` at 512.
+
+The working conclusion is now sharper: the broad SVA socket works, and the learned low-rank Q/K score works as a compact ranking signal. Hard lookup cells have been weak, but score-preserving compressed scans can keep most of the learned-ranker signal.
 
 ## Million-Token Constraint
 
@@ -83,8 +85,9 @@ The likely million-token shape is a three-stage SVA stack:
 2. Model-aware cheap ranker
    - Rank within the summoned set before exact QK.
    - Use structure from the model rather than a fresh random projection.
-   - Current best target: learned low-rank Q/K projection.
-   - Good serving candidates: product-quantized QK, asymmetric compressed scoring, or an ANN index over compressed keys.
+   - Current ranking signal: learned low-rank Q/K projection.
+   - Current best serving target: product-quantized learned Q/K scoring.
+   - Good serving candidates: coarse-to-fine PQ, asymmetric compressed scoring, or an ANN index over compressed keys.
 
 3. Exact verifier
    - Run full QK only over the reduced candidate set.
@@ -98,10 +101,10 @@ So the next invention target is the cheap ranker. The summon stage already finds
 
 ## Next Verification Step
 
-The next architectural test is sublinear serving for the learned ranker:
+The next architectural test is efficient serving for the learned ranker:
 
 - keep the exact verifier unchanged
 - convert the rank-64 score into a true addressable lookup without random sign buckets or unsupervised centroid cells
-- test product-quantized asymmetric scoring or multi-probe ANN over compressed keys
+- test PQ scan throughput and coarse-to-fine PQ over compressed keys
 - keep the target at top-16 recall above `0.75` and verifier budget at or below `512`
 - rerun the million-token pressure simulation with empirical candidate density

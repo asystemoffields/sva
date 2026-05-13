@@ -68,6 +68,8 @@ The first supervised query-cell router confirms that supervised routing can move
 
 The high-resolution supervised router answered that directly. With `2048-4096` cells and small write/probe counts, it reached the projected candidate band but recall collapsed: `4096 cells / 4 writes / 2 probes` reached `0.012680` recall at about `999.5` projected candidates, and `2048 cells / 4 writes / 2 probes` reached `0.042721` at about `3.6k` projected candidates. The next branch is score-preserving compressed lookup, such as product-quantized or asymmetric scoring over the learned rank-64 keys.
 
+Product-quantized learned-score lookup is the new best serving signal. The exact learned rank-64 scorer reached `0.754046` recall at a 256-candidate verifier budget and `0.839084` at 512. PQ with `16 subspaces / 256 codewords` reached `0.704985` at 256 and `0.803184` at 512, while `8 subspaces / 256 codewords` reached `0.647166` at 256 and `0.755937` at 512. This preserves most of the learned-ranker signal while replacing full low-rank key scoring with compact code lookups.
+
 ## Files
 
 - `experiments/sva_kill_test.py`: standalone toy benchmark.
@@ -82,6 +84,7 @@ The high-resolution supervised router answered that directly. With `2048-4096` c
 - `experiments/sva_learned_multiwrite_ivf_lookup_test.py`: learned-ranker multi-write IVF serving test.
 - `experiments/sva_supervised_query_router_test.py`: learned-ranker supervised query-cell router serving test.
 - `experiments/sva_pq_lookup_test.py`: product-quantized learned-ranker lookup test.
+- `experiments/sva_pq_scan_benchmark.py`: synthetic million-token PQ scan throughput benchmark.
 - `experiments/sva_address_scaling.py`: address selectivity calculator for long contexts.
 - `modal_h100_trainable.py`: Modal H100 runner for the trainable benchmark.
 - `modal_h100_socket.py`: Modal H100 runner for the pretrained socket sweep.
@@ -94,6 +97,7 @@ The high-resolution supervised router answered that directly. With `2048-4096` c
 - `modal_h100_supervised_query_router.py`: Modal H100 runner for supervised query-cell router serving.
 - `modal_h100_supervised_query_router_hires.py`: Modal H100 runner for high-resolution supervised query-cell router serving.
 - `modal_h100_pq_lookup.py`: Modal H100 runner for product-quantized learned-ranker lookup.
+- `modal_h100_pq_scan_benchmark.py`: Modal H100 runner for PQ scan throughput.
 - `scripts/start_modal_h100_background.ps1`: detached Modal launcher that writes run logs under `results/modal_runs/`.
 - `results/verification_snapshot_2026-05-13.md`: current kill-test results.
 - `results/trainable_recall_snapshot_2026-05-13.md`: H100 trainable-representation checkpoint.
@@ -109,6 +113,7 @@ The high-resolution supervised router answered that directly. With `2048-4096` c
 - `results/learned_multiwrite_ivf_lookup_snapshot_2026-05-13.md`: learned-ranker multi-write IVF lookup snapshot.
 - `results/supervised_query_router_snapshot_2026-05-13.md`: supervised query-cell router lookup snapshot.
 - `results/supervised_query_router_hires_snapshot_2026-05-13.md`: high-resolution supervised query-cell router lookup snapshot.
+- `results/pq_lookup_snapshot_2026-05-13.md`: product-quantized learned-ranker lookup snapshot.
 - `notes/attention_replacement_findings.md`: broader research log leading to SVA.
 - `notes/million_token_scaling.md`: scaling target for million-token contexts.
 
@@ -126,6 +131,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_bac
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-supervised-query-router -ModalFile modal_h100_supervised_query_router.py
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-supervised-query-router-hires -ModalFile modal_h100_supervised_query_router_hires.py
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-pq-lookup -ModalFile modal_h100_pq_lookup.py
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-pq-scan-benchmark -ModalFile modal_h100_pq_scan_benchmark.py
 ```
 
 The launcher uses `modal run --detach` and writes local metadata, stdout, stderr, and result files under `results/modal_runs/`.
