@@ -30,6 +30,8 @@ The completed million-token pressure simulation used the same real 8192-token Sm
 
 The learned compressed-ranker test gives the first strong positive signal after that kill. A trained 64-dimensional Q/K score reached `0.759781` aggregate top-16 recall at a 256-candidate verifier budget and `0.848338` at a 512-candidate budget, using held-out query positions from the same 8192-token sample.
 
+The held-out text test preserved the signal. Training on one 8192-token stream and evaluating on a reversed 8192-token stream reached `0.749752` aggregate top-16 recall at a 256-candidate verifier budget and `0.835488` at a 512-candidate budget.
+
 The working conclusion is now sharper: the broad SVA socket works, and the next invention has to be the address code. Million-token retrieval needs a richer compressed catalog than random binary addresses, and a learned low-rank Q/K score is now the first useful catalog target.
 
 ## Million-Token Constraint
@@ -86,11 +88,10 @@ So the next invention target is the cheap ranker. The summon stage already finds
 
 ## Next Verification Step
 
-The next architectural test is held-out text generalization for the learned ranker:
+The next architectural test is sublinear serving for the learned ranker:
 
-- train on one or more 8192-token samples
-- evaluate on separate text samples
 - keep the exact verifier unchanged
-- keep the target at rank-64 or cheaper, top-16 recall above `0.75`, and verifier budget at or below `512`
-
-If that holds, convert the learned low-rank score into a true addressable lookup and rerun the million-token pressure simulation.
+- convert the rank-64 score into a true addressable lookup
+- test product-quantized keys, learned binary codes, or multi-probe ANN
+- keep the target at top-16 recall above `0.75` and verifier budget at or below `512`
+- rerun the million-token pressure simulation with empirical candidate density

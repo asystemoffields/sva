@@ -20,6 +20,7 @@ from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
 from transformers.models.llama.modeling_llama import apply_rotary_pos_emb, repeat_kv
 
 from sva_real_qk_address_sweep import (
+    TEXTS,
     comma_ints,
     make_long_text,
     parse_layers,
@@ -53,6 +54,18 @@ def split_query_positions(
     if len(eval_positions) == 0:
         raise ValueError("Need at least one eval query position.")
     return train, eval_positions
+
+
+def make_variant_text(repeats: int, mode: str) -> str:
+    if mode == "same":
+        return make_long_text(repeats)
+    if mode == "reverse":
+        paragraphs = list(reversed(TEXTS))
+    elif mode == "rotate":
+        paragraphs = TEXTS[1:] + TEXTS[:1]
+    else:
+        raise ValueError(f"Unknown eval text mode: {mode}")
+    return " ".join(paragraphs * max(repeats, 1))
 
 
 def target_distribution(top_idx: torch.Tensor, top_valid: torch.Tensor, seq_len: int) -> torch.Tensor:
@@ -234,6 +247,8 @@ def main() -> None:
     parser.add_argument("--model-id", default="HuggingFaceTB/SmolLM2-135M-Instruct")
     parser.add_argument("--max-length", type=int, default=0)
     parser.add_argument("--text-repeats", type=int, default=320)
+    parser.add_argument("--eval-text-repeats", type=int, default=0)
+    parser.add_argument("--eval-text-mode", choices=["same", "reverse", "rotate"], default="same")
     parser.add_argument("--layers", default="0,1,5,10,18,24,29")
     parser.add_argument("--rank-dims", default="16,32,64")
     parser.add_argument("--budgets", default="64,128,256,512,1024")
@@ -276,30 +291,59 @@ def main() -> None:
     tokenizer = AutoTokenizer.from_pretrained(args.model_id)
     if tokenizer.pad_token_id is None:
         tokenizer.pad_token = tokenizer.eos_token
-    batch = tokenizer(
+    eval_repeats = args.eval_text_repeats if args.eval_text_repeats > 0 else args.text_repeats
+    train_batch = tokenizer(
         [make_long_text(args.text_repeats)],
         return_tensors="pt",
         padding=False,
         truncation=True,
         max_length=effective_max_length,
     )
-    batch = {key: value.to(device) for key, value in batch.items()}
-    seq_len = int(batch["input_ids"].shape[1])
-    train_positions, eval_positions = split_query_positions(
-        seq_len,
-        args.topk,
-        args.train_query_samples,
-        args.eval_query_samples,
-        args.min_query_pos,
-        args.seed,
-    )
+    train_batch = {key: value.to(device) for key, value in train_batch.items()}
+    train_seq_len = int(train_batch["input_ids"].shape[1])
+    if args.eval_text_mode == "same" and eval_repeats == args.text_repeats:
+        eval_batch = train_batch
+        eval_seq_len = train_seq_len
+        train_positions, eval_positions = split_query_positions(
+            train_seq_len,
+            args.topk,
+            args.train_query_samples,
+            args.eval_query_samples,
+            args.min_query_pos,
+            args.seed,
+        )
+    else:
+        eval_batch = tokenizer(
+            [make_variant_text(eval_repeats, args.eval_text_mode)],
+            return_tensors="pt",
+            padding=False,
+            truncation=True,
+            max_length=effective_max_length,
+        )
+        eval_batch = {key: value.to(device) for key, value in eval_batch.items()}
+        eval_seq_len = int(eval_batch["input_ids"].shape[1])
+        train_positions = sample_query_positions(
+            train_seq_len,
+            args.topk,
+            args.train_query_samples,
+            args.min_query_pos,
+        )
+        eval_positions = sample_query_positions(
+            eval_seq_len,
+            args.topk,
+            args.eval_query_samples,
+            args.min_query_pos,
+        )
 
     print("metric,value")
     print(f"model_id,{args.model_id}")
     print(f"model_max_position_embeddings,{model_window}")
     print(f"requested_max_length,{requested}")
     print(f"effective_max_length,{effective_max_length}")
-    print(f"seq_len,{seq_len}")
+    print(f"seq_len,{train_seq_len}")
+    print(f"train_seq_len,{train_seq_len}")
+    print(f"eval_seq_len,{eval_seq_len}")
+    print(f"eval_text_mode,{args.eval_text_mode}")
     print(f"device,{device}")
     print(f"dtype,{dtype}")
     print(f"layers,{';'.join(str(layer) for layer in layers)}")
@@ -325,9 +369,15 @@ def main() -> None:
     ).to(device)
     model.eval()
     with torch.no_grad():
-        outputs = model(**batch, output_hidden_states=True, use_cache=False)
-    hidden_states = outputs.hidden_states
-    position_ids = torch.arange(seq_len, device=device).unsqueeze(0)
+        train_outputs = model(**train_batch, output_hidden_states=True, use_cache=False)
+        if eval_batch is train_batch:
+            eval_outputs = train_outputs
+        else:
+            eval_outputs = model(**eval_batch, output_hidden_states=True, use_cache=False)
+    train_hidden_states = train_outputs.hidden_states
+    eval_hidden_states = eval_outputs.hidden_states
+    train_position_ids = torch.arange(train_seq_len, device=device).unsqueeze(0)
+    eval_position_ids = torch.arange(eval_seq_len, device=device).unsqueeze(0)
     train_position_tensor = torch.tensor(train_positions, device=device, dtype=torch.long)
     eval_position_tensor = torch.tensor(eval_positions, device=device, dtype=torch.long)
     aggregate: dict[tuple[str, int, int], dict[str, object]] = defaultdict(
@@ -335,37 +385,53 @@ def main() -> None:
     )
 
     for layer_idx in layers:
-        query, key, scaling = layer_qk(model, hidden_states, layer_idx, position_ids)
+        train_query_all, train_key, train_scaling = layer_qk(
+            model,
+            train_hidden_states,
+            layer_idx,
+            train_position_ids,
+        )
+        if eval_hidden_states is train_hidden_states:
+            eval_query_all = train_query_all
+            eval_key = train_key
+            eval_scaling = train_scaling
+        else:
+            eval_query_all, eval_key, eval_scaling = layer_qk(
+                model,
+                eval_hidden_states,
+                layer_idx,
+                eval_position_ids,
+            )
         train_top_idx, train_top_valid = topk_indices_for_queries(
-            query,
-            key,
+            train_query_all,
+            train_key,
             train_positions,
             args.topk,
-            scaling,
+            train_scaling,
         )
         eval_top_idx, eval_top_valid = topk_indices_for_queries(
-            query,
-            key,
+            eval_query_all,
+            eval_key,
             eval_positions,
             args.topk,
-            scaling,
+            eval_scaling,
         )
-        train_query = query[:, train_position_tensor, :].contiguous()
-        eval_query = query[:, eval_position_tensor, :].contiguous()
+        train_query = train_query_all[:, train_position_tensor, :].contiguous()
+        eval_query = eval_query_all[:, eval_position_tensor, :].contiguous()
 
         for rank_dim in rank_dims:
             torch.manual_seed(args.seed + layer_idx * 1000 + rank_dim)
-            ranker = LowRankRanker(query.shape[0], query.shape[-1], rank_dim).to(device)
+            ranker = LowRankRanker(train_query_all.shape[0], train_query_all.shape[-1], rank_dim).to(device)
             evaluate_ranker(
                 "random",
                 layer_idx,
-                seq_len,
+                eval_seq_len,
                 rank_dim,
                 budgets,
                 0,
                 float("nan"),
                 ranker,
-                key,
+                eval_key,
                 eval_query,
                 eval_positions,
                 eval_top_idx,
@@ -374,7 +440,7 @@ def main() -> None:
             )
             final_loss = train_ranker(
                 ranker,
-                key,
+                train_key,
                 train_query,
                 train_positions,
                 train_top_idx,
@@ -388,13 +454,13 @@ def main() -> None:
             evaluate_ranker(
                 "trained",
                 layer_idx,
-                seq_len,
+                eval_seq_len,
                 rank_dim,
                 budgets,
                 args.train_steps,
                 final_loss,
                 ranker,
-                key,
+                eval_key,
                 eval_query,
                 eval_positions,
                 eval_top_idx,
@@ -402,7 +468,7 @@ def main() -> None:
                 aggregate,
             )
 
-        del query, key, train_query, eval_query
+        del train_query_all, train_key, eval_query_all, eval_key, train_query, eval_query
         if device.type == "cuda":
             torch.cuda.empty_cache()
 
@@ -410,7 +476,7 @@ def main() -> None:
         print_ranker_result(
             phase,
             "all",
-            seq_len,
+            eval_seq_len,
             rank_dim,
             budget,
             args.train_steps if phase == "trained" else 0,

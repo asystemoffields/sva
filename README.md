@@ -56,6 +56,8 @@ The million-token pressure simulation sharpened that result using empirical hit 
 
 The learned compressed-ranker test is the first strong follow-up. Training a small asymmetric Q/K ranker per layer/head on held-in query positions and evaluating held-out query positions reached aggregate top-16 recall `0.759781` with a 64-dimensional score and 256 verifier candidates, and `0.848338` with 512 verifier candidates. The next risk is held-out text generalization, then serving the learned score through an addressable lookup.
 
+The held-out text test preserved the signal. Training on one 8192-token stream and evaluating on a reversed 8192-token stream reached aggregate top-16 recall `0.749752` with rank 64 and 256 verifier candidates, and `0.835488` with 512 verifier candidates. The next invention target is sublinear lookup for that learned compact score.
+
 ## Files
 
 - `experiments/sva_kill_test.py`: standalone toy benchmark.
@@ -70,6 +72,7 @@ The learned compressed-ranker test is the first strong follow-up. Training a sma
 - `modal_h100_socket.py`: Modal H100 runner for the pretrained socket sweep.
 - `modal_h100_million_stream.py`: Modal H100 runner for the million-token address-pressure simulation.
 - `modal_h100_learned_ranker.py`: Modal H100 runner for the learned compressed-ranker test.
+- `modal_h100_learned_ranker_generalize.py`: Modal H100 runner for the held-out-text ranker test.
 - `scripts/start_modal_h100_background.ps1`: detached Modal launcher that writes run logs under `results/modal_runs/`.
 - `results/verification_snapshot_2026-05-13.md`: current kill-test results.
 - `results/trainable_recall_snapshot_2026-05-13.md`: H100 trainable-representation checkpoint.
@@ -79,6 +82,7 @@ The learned compressed-ranker test is the first strong follow-up. Training a sma
 - `results/real_qk_address_8192_snapshot_2026-05-13.md`: SmolLM2 full-window real-QK address sweep.
 - `results/million_stream_snapshot_2026-05-13.md`: million-token address-pressure snapshot.
 - `results/learned_ranker_snapshot_2026-05-13.md`: learned compressed-ranker snapshot.
+- `results/learned_ranker_generalization_snapshot_2026-05-13.md`: held-out-text learned ranker snapshot.
 - `notes/attention_replacement_findings.md`: broader research log leading to SVA.
 - `notes/million_token_scaling.md`: scaling target for million-token contexts.
 
@@ -89,6 +93,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_bac
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-socket -ModalFile modal_h100_socket.py
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-million-stream -ModalFile modal_h100_million_stream.py
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-learned-ranker -ModalFile modal_h100_learned_ranker.py
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-learned-ranker-generalize -ModalFile modal_h100_learned_ranker_generalize.py
 ```
 
 The launcher uses `modal run --detach` and writes local metadata, stdout, stderr, and result files under `results/modal_runs/`.
