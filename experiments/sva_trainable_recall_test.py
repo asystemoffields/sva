@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import math
 import random
+import time
 from collections import defaultdict
 from itertools import combinations
 
@@ -60,11 +61,12 @@ def make_batch(args: argparse.Namespace, batch_size: int, device: torch.device) 
 
 
 class SVAConfig:
-    def __init__(self, tables: int, bits: int, budget: int, probe_radius: int) -> None:
+    def __init__(self, tables: int, bits: int, budget: int, probe_radius: int, impl: str) -> None:
         self.tables = tables
         self.bits = bits
         self.budget = budget
         self.probe_radius = probe_radius
+        self.impl = impl
 
 
 class RMSNorm(nn.Module):
@@ -152,7 +154,12 @@ class CausalSelfAttention(nn.Module):
         elif mode == "sva":
             if sva is None:
                 raise ValueError("SVA config is required for mode='sva'")
-            y = self.sva_attention(q, k, v, sva, stats)
+            if sva.impl == "loop":
+                y = self.sva_attention_loop(q, k, v, sva, stats)
+            elif sva.impl == "mask":
+                y = self.sva_attention_mask(q, k, v, sva, stats)
+            else:
+                raise ValueError(f"unknown SVA implementation: {sva.impl}")
         else:
             raise ValueError(f"unknown attention mode: {mode}")
 
@@ -167,7 +174,56 @@ class CausalSelfAttention(nn.Module):
         weights = F.softmax(scores, dim=-1)
         return weights @ v
 
-    def sva_attention(
+    def sva_attention_mask(
+        self,
+        q: torch.Tensor,
+        k: torch.Tensor,
+        v: torch.Tensor,
+        sva: SVAConfig,
+        stats: dict[str, float] | None,
+    ) -> torch.Tensor:
+        batch, n_heads, seq_len, head_dim = q.shape
+        projections = self.sva_projections[:, : sva.tables, : sva.bits, :]
+        q_bits = torch.einsum("bhtd,hrmd->bhtrm", q, projections) > 0
+        k_bits = torch.einsum("bhtd,hrmd->bhtrm", k, projections) > 0
+
+        hamming = (q_bits[:, :, :, None, :, :] != k_bits[:, :, None, :, :, :]).sum(dim=-1)
+        candidate_mask = (hamming <= sva.probe_radius).any(dim=-1)
+        causal_mask = torch.ones(seq_len, seq_len, dtype=torch.bool, device=q.device).tril()
+        candidate_mask = candidate_mask & causal_mask[None, None, :, :]
+        eye = torch.eye(seq_len, dtype=torch.bool, device=q.device)
+        candidate_mask = candidate_mask | eye[None, None, :, :]
+
+        scores = q @ k.transpose(-2, -1) / math.sqrt(head_dim)
+        scores = scores.masked_fill(~candidate_mask, float("-inf"))
+        candidate_counts = candidate_mask.sum(dim=-1)
+
+        if sva.budget > 0 and sva.budget < seq_len:
+            chosen_scores, chosen_idx = torch.topk(scores, sva.budget, dim=-1)
+            source = v[:, :, None, :, :].expand(batch, n_heads, seq_len, seq_len, head_dim)
+            chosen_v = torch.gather(
+                source,
+                dim=3,
+                index=chosen_idx[..., None].expand(batch, n_heads, seq_len, sva.budget, head_dim),
+            )
+            weights = F.softmax(chosen_scores, dim=-1)
+            out = (weights[..., None] * chosen_v).sum(dim=-2)
+            verified_counts = torch.minimum(
+                candidate_counts,
+                torch.tensor(sva.budget, dtype=candidate_counts.dtype, device=candidate_counts.device),
+            )
+        else:
+            weights = F.softmax(scores, dim=-1)
+            out = weights @ v
+            verified_counts = candidate_counts
+
+        if stats is not None:
+            stats["summoned"] += float(candidate_counts.sum().item())
+            stats["verified"] += float(verified_counts.sum().item())
+            stats["queries"] += float(batch * n_heads * seq_len)
+        return out
+
+    def sva_attention_loop(
         self,
         q: torch.Tensor,
         k: torch.Tensor,
@@ -319,6 +375,7 @@ def evaluate(
 
 
 def train(args: argparse.Namespace, device: torch.device) -> TinyRecallTransformer:
+    start = time.perf_counter()
     model = TinyRecallTransformer(args).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
     for step in range(1, args.steps + 1):
@@ -340,6 +397,7 @@ def train(args: argparse.Namespace, device: torch.device) -> TinyRecallTransform
                 f"val_acc,{result['accuracy']:.4f}",
                 flush=True,
             )
+    print(f"train_done_seconds,{time.perf_counter() - start:.2f}", flush=True)
     return model
 
 
@@ -364,6 +422,7 @@ def main() -> None:
     parser.add_argument("--sva-tables", type=int, nargs="+", default=[8, 16, 24])
     parser.add_argument("--sva-bits", type=int, default=10)
     parser.add_argument("--sva-budget", type=int, default=16)
+    parser.add_argument("--sva-impl", choices=["mask", "loop"], default="mask")
     parser.add_argument("--probe-radius", type=int, default=1)
     parser.add_argument("--seed", type=int, default=101)
     args = parser.parse_args()
@@ -374,37 +433,48 @@ def main() -> None:
     model = train(args, device)
 
     print("method,loss,accuracy,avg_summoned,avg_verified")
+    eval_start = time.perf_counter()
+    print("eval_start,full_attention", flush=True)
     full = evaluate(model, args, device, "full")
     print(f"full_attention,{full['loss']:.4f},{full['accuracy']:.4f},0.0,0.0")
+    print(f"eval_done,full_attention,{time.perf_counter() - eval_start:.2f}", flush=True)
     for tables in args.sva_tables:
+        method = f"sva_{tables}x{args.sva_bits}"
+        eval_start = time.perf_counter()
+        print(f"eval_start,{method}", flush=True)
         exact = evaluate(
             model,
             args,
             device,
             "sva",
-            SVAConfig(tables, args.sva_bits, args.sva_budget, 0),
+            SVAConfig(tables, args.sva_bits, args.sva_budget, 0, args.sva_impl),
         )
         print(
-            f"sva_{tables}x{args.sva_bits},"
+            f"{method},"
             f"{exact['loss']:.4f},"
             f"{exact['accuracy']:.4f},"
             f"{exact['avg_summoned']:.1f},"
             f"{exact['avg_verified']:.1f}"
         )
+        print(f"eval_done,{method},{time.perf_counter() - eval_start:.2f}", flush=True)
+        method = f"sva_probe{args.probe_radius}_{tables}x{args.sva_bits}"
+        eval_start = time.perf_counter()
+        print(f"eval_start,{method}", flush=True)
         probed = evaluate(
             model,
             args,
             device,
             "sva",
-            SVAConfig(tables, args.sva_bits, args.sva_budget, args.probe_radius),
+            SVAConfig(tables, args.sva_bits, args.sva_budget, args.probe_radius, args.sva_impl),
         )
         print(
-            f"sva_probe{args.probe_radius}_{tables}x{args.sva_bits},"
+            f"{method},"
             f"{probed['loss']:.4f},"
             f"{probed['accuracy']:.4f},"
             f"{probed['avg_summoned']:.1f},"
             f"{probed['avg_verified']:.1f}"
         )
+        print(f"eval_done,{method},{time.perf_counter() - eval_start:.2f}", flush=True)
 
 
 if __name__ == "__main__":

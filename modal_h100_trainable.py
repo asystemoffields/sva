@@ -46,6 +46,8 @@ DEFAULT_ARGS = [
     "10",
     "--sva-budget",
     "16",
+    "--sva-impl",
+    "mask",
     "--probe-radius",
     "1",
     "--lr",
