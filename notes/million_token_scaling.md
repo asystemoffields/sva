@@ -44,7 +44,9 @@ The high-resolution supervised router reached the target density but lost the si
 
 Product-quantized learned-score lookup is the first strong serving result after the learned ranker. The exact learned rank-64 scorer reached `0.754046` recall at a 256-candidate verifier budget and `0.839084` at 512. PQ with `16 subspaces / 256 codewords` reached `0.704985` at 256 and `0.803184` at 512. A more compact `8 subspaces / 256 codewords` version reached `0.647166` at 256 and `0.755937` at 512.
 
-The working conclusion is now sharper: the broad SVA socket works, and the learned low-rank Q/K score works as a compact ranking signal. Hard lookup cells have been weak, but score-preserving compressed scans can keep most of the learned-ranker signal.
+The synthetic million-token PQ scan benchmark showed plausible but nontrivial throughput. On H100 with stock PyTorch gather plus top-k, `8 x 256` PQ over 9 heads scanned one million keys in about `2.2 ms` for one query; `16 x 256` took about `4.5 ms`. Used in every layer of a 30-layer model, that is too much without more structure or a custom kernel, but it is fast enough to justify a coarse-to-fine serving test.
+
+The working conclusion is now sharper: the broad SVA socket works, and the learned low-rank Q/K score works as a compact ranking signal. Hard lookup cells have been weak, but score-preserving compressed scans can keep most of the learned-ranker signal at plausible primitive speed.
 
 ## Million-Token Constraint
 
@@ -105,6 +107,6 @@ The next architectural test is efficient serving for the learned ranker:
 
 - keep the exact verifier unchanged
 - convert the rank-64 score into a true addressable lookup without random sign buckets or unsupervised centroid cells
-- test PQ scan throughput and coarse-to-fine PQ over compressed keys
+- test coarse-to-fine PQ over compressed keys
 - keep the target at top-16 recall above `0.75` and verifier budget at or below `512`
 - rerun the million-token pressure simulation with empirical candidate density

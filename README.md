@@ -70,6 +70,8 @@ The high-resolution supervised router answered that directly. With `2048-4096` c
 
 Product-quantized learned-score lookup is the new best serving signal. The exact learned rank-64 scorer reached `0.754046` recall at a 256-candidate verifier budget and `0.839084` at 512. PQ with `16 subspaces / 256 codewords` reached `0.704985` at 256 and `0.803184` at 512, while `8 subspaces / 256 codewords` reached `0.647166` at 256 and `0.755937` at 512. This preserves most of the learned-ranker signal while replacing full low-rank key scoring with compact code lookups.
 
+The first synthetic million-token throughput check is plausible but still costly if used everywhere. On H100 with stock PyTorch gather plus top-k, `8 x 256` PQ over 9 heads scanned one million keys in about `2.2 ms` for one query; `16 x 256` took about `4.5 ms`. The next target is coarse-to-fine PQ so the full scan can be cheaper and the high-quality score only runs on a shortlist.
+
 ## Files
 
 - `experiments/sva_kill_test.py`: standalone toy benchmark.
@@ -114,6 +116,7 @@ Product-quantized learned-score lookup is the new best serving signal. The exact
 - `results/supervised_query_router_snapshot_2026-05-13.md`: supervised query-cell router lookup snapshot.
 - `results/supervised_query_router_hires_snapshot_2026-05-13.md`: high-resolution supervised query-cell router lookup snapshot.
 - `results/pq_lookup_snapshot_2026-05-13.md`: product-quantized learned-ranker lookup snapshot.
+- `results/pq_scan_benchmark_snapshot_2026-05-13.md`: synthetic million-token PQ scan throughput snapshot.
 - `notes/attention_replacement_findings.md`: broader research log leading to SVA.
 - `notes/million_token_scaling.md`: scaling target for million-token contexts.
 
