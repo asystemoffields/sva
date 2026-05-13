@@ -66,6 +66,8 @@ Multi-write IVF answered the first half of that branch. Giving each key `2,4,8` 
 
 The first supervised query-cell router confirms that supervised routing can move recall, but the low-resolution cells are too dense. It reached `0.655816` aggregate recall at about `167k` projected million-token candidates, while the smallest setting reached only `0.039109` recall at about `3.7k` projected candidates. The next run raises the cell count to test whether the supervised signal survives in the `128-1024` projected-candidate band.
 
+The high-resolution supervised router answered that directly. With `2048-4096` cells and small write/probe counts, it reached the projected candidate band but recall collapsed: `4096 cells / 4 writes / 2 probes` reached `0.012680` recall at about `999.5` projected candidates, and `2048 cells / 4 writes / 2 probes` reached `0.042721` at about `3.6k` projected candidates. The next branch is score-preserving compressed lookup, such as product-quantized or asymmetric scoring over the learned rank-64 keys.
+
 ## Files
 
 - `experiments/sva_kill_test.py`: standalone toy benchmark.
@@ -104,6 +106,7 @@ The first supervised query-cell router confirms that supervised routing can move
 - `results/learned_ivf_lookup_snapshot_2026-05-13.md`: learned-ranker IVF lookup snapshot.
 - `results/learned_multiwrite_ivf_lookup_snapshot_2026-05-13.md`: learned-ranker multi-write IVF lookup snapshot.
 - `results/supervised_query_router_snapshot_2026-05-13.md`: supervised query-cell router lookup snapshot.
+- `results/supervised_query_router_hires_snapshot_2026-05-13.md`: high-resolution supervised query-cell router lookup snapshot.
 - `notes/attention_replacement_findings.md`: broader research log leading to SVA.
 - `notes/million_token_scaling.md`: scaling target for million-token contexts.
 
