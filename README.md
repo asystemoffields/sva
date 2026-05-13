@@ -43,5 +43,22 @@ The next research step is to test SVA in a tiny trainable sequence model where k
 
 - `experiments/sva_kill_test.py`: standalone toy benchmark.
 - `experiments/sva_causal_sequence_test.py`: incremental causal-cache benchmark.
+- `experiments/sva_trainable_recall_test.py`: trainable modern-decoder recall benchmark.
+- `modal_h100_trainable.py`: Modal H100 runner for the trainable benchmark.
+- `scripts/start_modal_h100_background.ps1`: detached Modal launcher that writes run logs under `results/modal_runs/`.
 - `results/verification_snapshot_2026-05-13.md`: current kill-test results.
 - `notes/attention_replacement_findings.md`: broader research log leading to SVA.
+
+## H100 Run
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-trainable
+```
+
+The launcher uses `modal run --detach` and writes local metadata, stdout, stderr, and result files under `results/modal_runs/`.
+
+Live progress is visible through Modal logs:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\watch_modal_h100.ps1 -Tail 200
+```
