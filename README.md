@@ -37,23 +37,34 @@ With a 32-dimensional prefilter, `sva_probe1_prefilter32d128_16x10` kept `top1=0
 
 The causal-cache test is now positive too. At 1024 tokens, `sva_causal_probe1_prefilter32d128_24x12` reached `top1=0.9957` with about 54 summoned prior pages on average, while full causal attention read about 512 prior pages on average in the same setup.
 
-The next research step is to test SVA in a tiny trainable sequence model where keys and queries are learned rather than synthetic.
+The pretrained socket test is now the sharpest signal. In `HuggingFaceTB/SmolLM2-135M-Instruct`, SVA can replace every Llama attention layer's score matrix while keeping the pretrained Q/K/V/O projections, RoPE, norms, MLPs, and logits. The best first H100 sweep matched full attention closely on short prompts:
+
+```text
+setting                         loss_delta  KL_to_full  top1_agree  logit_cos  avg_verified
+32 tables, 10 bits, probe 2     0.093750    0.188110    0.783883    0.974020   20.432 / 53
+```
+
+That makes the next research step a longer-context pretrained socket sweep with per-layer and per-head recall diagnostics.
 
 ## Files
 
 - `experiments/sva_kill_test.py`: standalone toy benchmark.
 - `experiments/sva_causal_sequence_test.py`: incremental causal-cache benchmark.
 - `experiments/sva_trainable_recall_test.py`: trainable modern-decoder recall benchmark.
+- `experiments/sva_pretrained_socket_test.py`: pretrained SmolLM2 attention-socket benchmark.
 - `modal_h100_trainable.py`: Modal H100 runner for the trainable benchmark.
+- `modal_h100_socket.py`: Modal H100 runner for the pretrained socket sweep.
 - `scripts/start_modal_h100_background.ps1`: detached Modal launcher that writes run logs under `results/modal_runs/`.
 - `results/verification_snapshot_2026-05-13.md`: current kill-test results.
 - `results/trainable_recall_snapshot_2026-05-13.md`: H100 trainable-representation checkpoint.
+- `results/pretrained_socket_snapshot_2026-05-13.md`: SmolLM2 pretrained socket checkpoint.
 - `notes/attention_replacement_findings.md`: broader research log leading to SVA.
 
 ## H100 Run
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-trainable
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-socket -ModalFile modal_h100_socket.py
 ```
 
 The launcher uses `modal run --detach` and writes local metadata, stdout, stderr, and result files under `results/modal_runs/`.
