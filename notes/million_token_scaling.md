@@ -17,6 +17,19 @@ At 512 tokens, the strongest setting was:
 
 That setting summons about `221` candidates per query at 512 tokens. In a causal sequence, the average available prefix is about half the context length, so this is still a broad read.
 
+The first full-window address sweep used SmolLM2's actual configured context window:
+
+- `model_max_position_embeddings=8192`
+- `seq_len=8192`
+- sampled layers: `0,1,5,10,18,24,29`
+- full-QK target: top 16 keys per sampled query/head
+
+Aggregate result: random high-bit binary addresses split the tradeoff sharply. `14 bits / 128 tables / radius 2` reached `0.838557` top-16 recall, but projects to about `282k` random candidates at a million tokens. `24 bits / 128 tables / radius 2` projects to about `1.1k` random candidates, but reached only `0.092231` top-16 recall.
+
+The completed million-token pressure simulation used the same real 8192-token SmolLM2 Q/K samples and projected empirical address hit density to a million-token prefix. The best aggregate recall was `20 bits / 256 tables / radius 2` at `0.384905`, but it projected to about `39.6k` average empirical candidates at a million tokens, with p95 about `129k`. In the rough `128-1024` average candidate band, aggregate recall stayed around 1-2%.
+
+The working conclusion is now sharper: the broad SVA socket works, and the next invention has to be the address code. Million-token retrieval needs a richer compressed catalog than random binary addresses.
+
 ## Million-Token Constraint
 
 At a 1,000,000-token context, average prefix length is about 500,000. A usable replacement should keep exact full-dimensional QK scoring in the rough range of 128 to 1024 candidates per query.
@@ -70,12 +83,9 @@ So the next invention target is the cheap ranker. The summon stage already finds
 
 ## Next Verification Step
 
-Run a high-bit address sweep on real SmolLM2 Q/K activations:
+The next architectural test is a trained/model-aware address code:
 
-- contexts: 512 and 1024 if feasible
-- bits: 14, 16, 18, 20, 22, 24
-- tables: 64 and 128
-- probe radii: 1 and 2
-- metric: top-16 full-attention key recall versus exact-scored candidate count
-
-Then run a million-token retrieval simulation using real SmolLM2 key/query samples plus streamed distractor keys. That test does not need full language-model forward passes over a million tokens; it only needs to answer whether high-resolution addresses can preserve the full-QK top keys at million-token scale.
+- fit a compact projection per layer/head against full-QK top-key labels
+- keep the exact verifier unchanged
+- rerun the 8192-window recall sweep
+- rerun the million-token pressure simulation

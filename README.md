@@ -50,6 +50,10 @@ The next research step is to make the summoned candidate set smaller. In the cur
 
 The first random-projection prefilter reduced exact scoring but exposed the next bottleneck. At 256 tokens, `prefilter_dim=48 / prefilter_budget=64` cut exact scoring from about 113 candidates to 55 with `loss_delta=0.062500`. At 512 tokens, the same shape cut exact scoring from about 223 to 60 with `loss_delta=0.125000`. The next invention target is a better cheap ranker inside the summoned set.
 
+The full-window real-QK address sweep now matches SmolLM2's configured context window: `max_position_embeddings=8192`, `seq_len=8192`. Random high-bit binary addresses are a kill for the million-token version of that exact address function. Aggregate top-16 recall at `14 bits / 128 tables / radius 2` was `0.838557`, but the random million-token candidate estimate was about `282k`. At `24 bits / 128 tables / radius 2`, the estimate falls to about `1.1k`, but top-16 recall was only `0.092231`.
+
+The million-token pressure simulation sharpened that result using empirical hit density from real 8192-token SmolLM2 Q/K samples. The best aggregate recall was `20 bits / 256 tables / radius 2` at `0.384905`, but it projected to about `39.6k` average candidates at a million tokens, with p95 about `129k`. In the rough 128-1024 candidate band, aggregate recall stayed around 1-2%. The next work is a learned or model-aware address code.
+
 ## Files
 
 - `experiments/sva_kill_test.py`: standalone toy benchmark.
@@ -57,15 +61,19 @@ The first random-projection prefilter reduced exact scoring but exposed the next
 - `experiments/sva_trainable_recall_test.py`: trainable modern-decoder recall benchmark.
 - `experiments/sva_pretrained_socket_test.py`: pretrained SmolLM2 attention-socket benchmark.
 - `experiments/sva_real_qk_address_sweep.py`: real-QK high-bit address sweep at the model's configured context window.
+- `experiments/sva_million_stream_sim.py`: million-token address-pressure simulation from real SmolLM2 8192-token Q/K samples.
 - `experiments/sva_address_scaling.py`: address selectivity calculator for long contexts.
 - `modal_h100_trainable.py`: Modal H100 runner for the trainable benchmark.
 - `modal_h100_socket.py`: Modal H100 runner for the pretrained socket sweep.
+- `modal_h100_million_stream.py`: Modal H100 runner for the million-token address-pressure simulation.
 - `scripts/start_modal_h100_background.ps1`: detached Modal launcher that writes run logs under `results/modal_runs/`.
 - `results/verification_snapshot_2026-05-13.md`: current kill-test results.
 - `results/trainable_recall_snapshot_2026-05-13.md`: H100 trainable-representation checkpoint.
 - `results/pretrained_socket_snapshot_2026-05-13.md`: SmolLM2 pretrained socket checkpoint.
 - `results/pretrained_long_socket_snapshot_2026-05-13.md`: longer-context SmolLM2 socket checkpoint.
 - `results/pretrained_prefilter_socket_snapshot_2026-05-13.md`: cheap-prefilter socket checkpoint.
+- `results/real_qk_address_8192_snapshot_2026-05-13.md`: SmolLM2 full-window real-QK address sweep.
+- `results/million_stream_snapshot_2026-05-13.md`: million-token address-pressure snapshot.
 - `notes/attention_replacement_findings.md`: broader research log leading to SVA.
 - `notes/million_token_scaling.md`: scaling target for million-token contexts.
 
@@ -74,6 +82,7 @@ The first random-projection prefilter reduced exact scoring but exposed the next
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-trainable
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-socket -ModalFile modal_h100_socket.py
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-million-stream -ModalFile modal_h100_million_stream.py
 ```
 
 The launcher uses `modal run --detach` and writes local metadata, stdout, stderr, and result files under `results/modal_runs/`.
