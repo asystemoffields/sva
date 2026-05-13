@@ -44,7 +44,9 @@ setting                         loss_delta  KL_to_full  top1_agree  logit_cos  a
 32 tables, 10 bits, probe 2     0.093750    0.188110    0.783883    0.974020   20.432 / 53
 ```
 
-That makes the next research step a longer-context pretrained socket sweep with per-layer and per-head recall diagnostics.
+The longer-context H100 sweep strengthened that result. At 512 tokens, `64 tables / 10 bits / probe 2 / budget 128` reached `loss_delta=0.015625`, `KL=0.009582`, `top1_agreement=0.970646`, and top-16 full-attention key recall `0.976191`.
+
+The next research step is to make the summoned candidate set smaller. In the current socket harness, `avg_summoned` is the exact-scored set; at 512 tokens the strongest setting summons about 221 candidates before the post-score top-k budget. The next experiment should add a cheap prefilter and measure whether we can keep top-key recall near 0.97 while exact-scoring far fewer candidates.
 
 ## Files
 
@@ -58,6 +60,7 @@ That makes the next research step a longer-context pretrained socket sweep with 
 - `results/verification_snapshot_2026-05-13.md`: current kill-test results.
 - `results/trainable_recall_snapshot_2026-05-13.md`: H100 trainable-representation checkpoint.
 - `results/pretrained_socket_snapshot_2026-05-13.md`: SmolLM2 pretrained socket checkpoint.
+- `results/pretrained_long_socket_snapshot_2026-05-13.md`: longer-context SmolLM2 socket checkpoint.
 - `notes/attention_replacement_findings.md`: broader research log leading to SVA.
 
 ## H100 Run

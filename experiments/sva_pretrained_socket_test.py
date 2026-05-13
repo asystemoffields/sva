@@ -493,6 +493,8 @@ def main() -> None:
         print(f"{key},{value:.6f}")
     print(f"avg_summoned,{avg_summoned:.3f}")
     print(f"avg_verified,{avg_verified:.3f}")
+    print(f"avg_exact_scored,{avg_summoned:.3f}")
+    print(f"avg_postscore_attended,{avg_verified:.3f}")
     print_diagnostics(cfg)
 
 
