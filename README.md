@@ -76,6 +76,7 @@ Multi-write IVF answered the first half of that branch. Giving each key `2,4,8` 
 - `experiments/sva_learned_lsh_lookup_test.py`: learned-ranker random-hyperplane LSH serving test.
 - `experiments/sva_learned_ivf_lookup_test.py`: learned-ranker IVF/centroid routing serving test.
 - `experiments/sva_learned_multiwrite_ivf_lookup_test.py`: learned-ranker multi-write IVF serving test.
+- `experiments/sva_supervised_query_router_test.py`: learned-ranker supervised query-cell router serving test.
 - `experiments/sva_address_scaling.py`: address selectivity calculator for long contexts.
 - `modal_h100_trainable.py`: Modal H100 runner for the trainable benchmark.
 - `modal_h100_socket.py`: Modal H100 runner for the pretrained socket sweep.
@@ -85,6 +86,7 @@ Multi-write IVF answered the first half of that branch. Giving each key `2,4,8` 
 - `modal_h100_learned_lsh_lookup.py`: Modal H100 runner for learned-ranker LSH serving.
 - `modal_h100_learned_ivf_lookup.py`: Modal H100 runner for learned-ranker IVF serving.
 - `modal_h100_learned_multiwrite_ivf_lookup.py`: Modal H100 runner for learned-ranker multi-write IVF serving.
+- `modal_h100_supervised_query_router.py`: Modal H100 runner for supervised query-cell router serving.
 - `scripts/start_modal_h100_background.ps1`: detached Modal launcher that writes run logs under `results/modal_runs/`.
 - `results/verification_snapshot_2026-05-13.md`: current kill-test results.
 - `results/trainable_recall_snapshot_2026-05-13.md`: H100 trainable-representation checkpoint.
@@ -112,6 +114,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_bac
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-learned-lsh-lookup -ModalFile modal_h100_learned_lsh_lookup.py
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-learned-ivf-lookup -ModalFile modal_h100_learned_ivf_lookup.py
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-learned-multiwrite-ivf-lookup -ModalFile modal_h100_learned_multiwrite_ivf_lookup.py
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-supervised-query-router -ModalFile modal_h100_supervised_query_router.py
 ```
 
 The launcher uses `modal run --detach` and writes local metadata, stdout, stderr, and result files under `results/modal_runs/`.
