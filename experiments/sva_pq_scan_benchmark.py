@@ -7,7 +7,9 @@ import time
 
 import torch
 
-from sva_real_qk_address_sweep import comma_ints
+
+def comma_ints(value: str) -> list[int]:
+    return [int(item.strip()) for item in value.split(",") if item.strip()]
 
 
 def make_tables(
@@ -169,4 +171,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
