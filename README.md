@@ -56,6 +56,7 @@ The first random-projection prefilter reduced exact scoring but exposed the next
 - `experiments/sva_causal_sequence_test.py`: incremental causal-cache benchmark.
 - `experiments/sva_trainable_recall_test.py`: trainable modern-decoder recall benchmark.
 - `experiments/sva_pretrained_socket_test.py`: pretrained SmolLM2 attention-socket benchmark.
+- `experiments/sva_address_scaling.py`: address selectivity calculator for long contexts.
 - `modal_h100_trainable.py`: Modal H100 runner for the trainable benchmark.
 - `modal_h100_socket.py`: Modal H100 runner for the pretrained socket sweep.
 - `scripts/start_modal_h100_background.ps1`: detached Modal launcher that writes run logs under `results/modal_runs/`.
@@ -65,6 +66,7 @@ The first random-projection prefilter reduced exact scoring but exposed the next
 - `results/pretrained_long_socket_snapshot_2026-05-13.md`: longer-context SmolLM2 socket checkpoint.
 - `results/pretrained_prefilter_socket_snapshot_2026-05-13.md`: cheap-prefilter socket checkpoint.
 - `notes/attention_replacement_findings.md`: broader research log leading to SVA.
+- `notes/million_token_scaling.md`: scaling target for million-token contexts.
 
 ## H100 Run
 
