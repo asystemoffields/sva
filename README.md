@@ -46,7 +46,9 @@ setting                         loss_delta  KL_to_full  top1_agree  logit_cos  a
 
 The longer-context H100 sweep strengthened that result. At 512 tokens, `64 tables / 10 bits / probe 2 / budget 128` reached `loss_delta=0.015625`, `KL=0.009582`, `top1_agreement=0.970646`, and top-16 full-attention key recall `0.976191`.
 
-The next research step is to make the summoned candidate set smaller. In the current socket harness, `avg_summoned` is the exact-scored set; at 512 tokens the strongest setting summons about 221 candidates before the post-score top-k budget. The next experiment should add a cheap prefilter and measure whether we can keep top-key recall near 0.97 while exact-scoring far fewer candidates.
+The next research step is to make the summoned candidate set smaller. In the current socket harness, `avg_summoned` is the broad lookup set; without a prefilter, that is also the exact-scored set. At 512 tokens the strongest setting summons about 221 candidates before the post-score top-k budget.
+
+The first random-projection prefilter reduced exact scoring but exposed the next bottleneck. At 256 tokens, `prefilter_dim=48 / prefilter_budget=64` cut exact scoring from about 113 candidates to 55 with `loss_delta=0.062500`. At 512 tokens, the same shape cut exact scoring from about 223 to 60 with `loss_delta=0.125000`. The next invention target is a better cheap ranker inside the summoned set.
 
 ## Files
 
@@ -61,6 +63,7 @@ The next research step is to make the summoned candidate set smaller. In the cur
 - `results/trainable_recall_snapshot_2026-05-13.md`: H100 trainable-representation checkpoint.
 - `results/pretrained_socket_snapshot_2026-05-13.md`: SmolLM2 pretrained socket checkpoint.
 - `results/pretrained_long_socket_snapshot_2026-05-13.md`: longer-context SmolLM2 socket checkpoint.
+- `results/pretrained_prefilter_socket_snapshot_2026-05-13.md`: cheap-prefilter socket checkpoint.
 - `notes/attention_replacement_findings.md`: broader research log leading to SVA.
 
 ## H100 Run
