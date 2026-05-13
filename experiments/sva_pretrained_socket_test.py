@@ -20,6 +20,14 @@ from transformers.cache_utils import Cache
 from transformers.models.llama.modeling_llama import apply_rotary_pos_emb, repeat_kv
 
 
+def make_stats() -> defaultdict[str, float]:
+    return defaultdict(float)
+
+
+def make_nested_stats() -> defaultdict[int | tuple[int, int], defaultdict[str, float]]:
+    return defaultdict(make_stats)
+
+
 TEXTS = [
     (
         "Summon-Verify Attention asks a query to summon a small set of candidate memories, "
@@ -61,7 +69,11 @@ class SVAConfig:
     budget: int = 64
     probe_radius: int = 1
     seed: int = 17
-    stats: dict[str, float] = field(default_factory=lambda: defaultdict(float))
+    diagnose_topk: int = 0
+    head_report_limit: int = 0
+    stats: defaultdict[str, float] = field(default_factory=make_stats)
+    layer_stats: defaultdict[int | tuple[int, int], defaultdict[str, float]] = field(default_factory=make_nested_stats)
+    head_stats: defaultdict[int | tuple[int, int], defaultdict[str, float]] = field(default_factory=make_nested_stats)
 
 
 class SVALlamaAttention(nn.Module):
@@ -142,17 +154,28 @@ class SVALlamaAttention(nn.Module):
 
         if attention_mask is not None:
             allowed = attention_mask[..., :q_len, :k_len] > -1e4
+            allowed = allowed.expand(batch, n_heads, q_len, k_len)
             candidate_mask = candidate_mask & allowed
         else:
             causal = torch.ones(q_len, k_len, dtype=torch.bool, device=query.device).tril()
-            candidate_mask = candidate_mask & causal[None, None, :, :]
+            allowed = causal[None, None, :, :].expand(batch, n_heads, q_len, k_len)
+            candidate_mask = candidate_mask & allowed
 
         if q_len == k_len:
             eye = torch.eye(q_len, dtype=torch.bool, device=query.device)
             candidate_mask = candidate_mask | eye[None, None, :, :]
 
-        scores = torch.matmul(query, key_states.transpose(2, 3)) * self.scaling
-        scores = scores.masked_fill(~candidate_mask, torch.finfo(scores.dtype).min)
+        full_scores = torch.matmul(query, key_states.transpose(2, 3)) * self.scaling
+        top_idx = None
+        top_valid = None
+        if cfg.diagnose_topk > 0:
+            topk = min(cfg.diagnose_topk, k_len)
+            full_masked = full_scores.masked_fill(~allowed, torch.finfo(full_scores.dtype).min)
+            top_idx = full_masked.topk(topk, dim=-1).indices
+            rank = torch.arange(topk, device=query.device)
+            top_valid = rank[None, None, None, :] < allowed.sum(dim=-1)[..., None]
+
+        scores = full_scores.masked_fill(~candidate_mask, torch.finfo(full_scores.dtype).min)
         candidate_counts = candidate_mask.sum(dim=-1)
 
         if cfg.budget > 0 and cfg.budget < k_len:
@@ -169,15 +192,96 @@ class SVALlamaAttention(nn.Module):
                 candidate_counts,
                 torch.tensor(cfg.budget, dtype=candidate_counts.dtype, device=candidate_counts.device),
             )
+            verified_mask = None
+            if cfg.diagnose_topk > 0:
+                chosen_valid = torch.arange(cfg.budget, device=query.device)
+                chosen_valid = chosen_valid[None, None, None, :] < verified_counts[..., None]
+                verified_mask = torch.zeros_like(candidate_mask)
+                verified_mask.scatter_(-1, chosen_idx, chosen_valid)
         else:
             weights = F.softmax(scores, dim=-1, dtype=torch.float32).to(query.dtype)
             output = torch.matmul(weights, value_states)
             verified_counts = candidate_counts
+            verified_mask = candidate_mask
 
-        cfg.stats["summoned"] += float(candidate_counts.sum().item())
-        cfg.stats["verified"] += float(verified_counts.sum().item())
-        cfg.stats["queries"] += float(candidate_counts.numel())
+        record_attention_stats(
+            cfg,
+            int(self.layer_idx or 0),
+            candidate_counts,
+            verified_counts,
+            candidate_mask,
+            verified_mask,
+            top_idx,
+            top_valid,
+        )
         return output
+
+
+def add_to_stats(target: defaultdict[str, float], values: dict[str, float]) -> None:
+    for key, value in values.items():
+        target[key] += value
+
+
+def record_attention_stats(
+    cfg: SVAConfig,
+    layer_idx: int,
+    candidate_counts: torch.Tensor,
+    verified_counts: torch.Tensor,
+    candidate_mask: torch.Tensor,
+    verified_mask: torch.Tensor | None,
+    top_idx: torch.Tensor | None,
+    top_valid: torch.Tensor | None,
+) -> None:
+    candidate_counts_f = candidate_counts.float()
+    verified_counts_f = verified_counts.float()
+    total = {
+        "summoned": float(candidate_counts_f.sum().item()),
+        "verified": float(verified_counts_f.sum().item()),
+        "queries": float(candidate_counts.numel()),
+    }
+    add_to_stats(cfg.stats, total)
+    add_to_stats(cfg.layer_stats[layer_idx], total)
+
+    if cfg.head_report_limit > 0:
+        per_head_summoned = candidate_counts_f.sum(dim=(0, 2)).detach().cpu()
+        per_head_verified = verified_counts_f.sum(dim=(0, 2)).detach().cpu()
+        head_queries = float(candidate_counts.shape[0] * candidate_counts.shape[2])
+        for head_idx in range(candidate_counts.shape[1]):
+            add_to_stats(
+                cfg.head_stats[(layer_idx, head_idx)],
+                {
+                    "summoned": float(per_head_summoned[head_idx].item()),
+                    "verified": float(per_head_verified[head_idx].item()),
+                    "queries": head_queries,
+                },
+            )
+
+    if top_idx is None or top_valid is None or verified_mask is None:
+        return
+
+    candidate_hits = candidate_mask.gather(dim=-1, index=top_idx) & top_valid
+    verified_hits = verified_mask.gather(dim=-1, index=top_idx) & top_valid
+    top_stats = {
+        "topk_items": float(top_valid.sum().item()),
+        "candidate_topk_hits": float(candidate_hits.sum().item()),
+        "verified_topk_hits": float(verified_hits.sum().item()),
+    }
+    add_to_stats(cfg.stats, top_stats)
+    add_to_stats(cfg.layer_stats[layer_idx], top_stats)
+
+    if cfg.head_report_limit > 0:
+        per_head_items = top_valid.float().sum(dim=(0, 2, 3)).detach().cpu()
+        per_head_candidate_hits = candidate_hits.float().sum(dim=(0, 2, 3)).detach().cpu()
+        per_head_verified_hits = verified_hits.float().sum(dim=(0, 2, 3)).detach().cpu()
+        for head_idx in range(candidate_counts.shape[1]):
+            add_to_stats(
+                cfg.head_stats[(layer_idx, head_idx)],
+                {
+                    "topk_items": float(per_head_items[head_idx].item()),
+                    "candidate_topk_hits": float(per_head_candidate_hits[head_idx].item()),
+                    "verified_topk_hits": float(per_head_verified_hits[head_idx].item()),
+                },
+            )
 
 
 def patch_model_with_sva(model: nn.Module, cfg: SVAConfig) -> None:
@@ -185,14 +289,27 @@ def patch_model_with_sva(model: nn.Module, cfg: SVAConfig) -> None:
         layer.self_attn = SVALlamaAttention(layer.self_attn, cfg)
 
 
-def load_texts(path: str | None) -> list[str]:
+def make_long_texts(n_texts: int, repeats: int) -> list[str]:
+    texts = []
+    for sample_idx in range(n_texts):
+        paragraphs = [
+            TEXTS[(sample_idx + offset) % len(TEXTS)]
+            for offset in range(max(repeats, 1) * len(TEXTS))
+        ]
+        texts.append(" ".join(paragraphs))
+    return texts
+
+
+def load_texts(path: str | None, long_texts: bool, n_texts: int | None, text_repeats: int) -> list[str]:
     if path is None:
-        return TEXTS
+        if long_texts:
+            return make_long_texts(n_texts or 4, text_repeats)
+        return TEXTS[:n_texts] if n_texts is not None else TEXTS
     with open(path, "r", encoding="utf-8") as handle:
         texts = [line.strip() for line in handle if line.strip()]
     if not texts:
         raise ValueError(f"No non-empty texts found in {path}")
-    return texts
+    return texts[:n_texts] if n_texts is not None else texts
 
 
 def encode_batch(tokenizer, texts: list[str], max_length: int, device: torch.device) -> dict[str, torch.Tensor]:
@@ -248,16 +365,71 @@ def run_model(model, batch: dict[str, torch.Tensor]) -> torch.Tensor:
     return output.logits
 
 
+def ratio(stats: dict[str, float], numerator: str, denominator: str) -> float:
+    total = stats.get(denominator, 0.0)
+    if total <= 0:
+        return float("nan")
+    return stats.get(numerator, 0.0) / total
+
+
+def print_diagnostics(cfg: SVAConfig) -> None:
+    if cfg.diagnose_topk <= 0 or cfg.stats["topk_items"] <= 0:
+        return
+
+    print(f"candidate_top{cfg.diagnose_topk}_recall,{ratio(cfg.stats, 'candidate_topk_hits', 'topk_items'):.6f}")
+    print(f"verified_top{cfg.diagnose_topk}_recall,{ratio(cfg.stats, 'verified_topk_hits', 'topk_items'):.6f}")
+    print("layer_metric_header,layer,avg_summoned,avg_verified,candidate_topk_recall,verified_topk_recall")
+    for layer_idx in sorted(key for key in cfg.layer_stats if isinstance(key, int)):
+        stats = cfg.layer_stats[layer_idx]
+        avg_summoned = ratio(stats, "summoned", "queries")
+        avg_verified = ratio(stats, "verified", "queries")
+        candidate_recall = ratio(stats, "candidate_topk_hits", "topk_items")
+        verified_recall = ratio(stats, "verified_topk_hits", "topk_items")
+        print(
+            "layer_metric,"
+            f"{layer_idx},{avg_summoned:.3f},{avg_verified:.3f},{candidate_recall:.6f},{verified_recall:.6f}"
+        )
+
+    if cfg.head_report_limit <= 0:
+        return
+
+    rows = []
+    for key, stats in cfg.head_stats.items():
+        layer_idx, head_idx = key
+        rows.append(
+            (
+                ratio(stats, "verified_topk_hits", "topk_items"),
+                ratio(stats, "candidate_topk_hits", "topk_items"),
+                layer_idx,
+                head_idx,
+                ratio(stats, "summoned", "queries"),
+                ratio(stats, "verified", "queries"),
+            )
+        )
+    rows.sort(key=lambda row: (row[0], row[1]))
+    print("worst_head_header,layer,head,avg_summoned,avg_verified,candidate_topk_recall,verified_topk_recall")
+    for verified_recall, candidate_recall, layer_idx, head_idx, avg_summoned, avg_verified in rows[: cfg.head_report_limit]:
+        print(
+            "worst_head,"
+            f"{layer_idx},{head_idx},{avg_summoned:.3f},{avg_verified:.3f},{candidate_recall:.6f},{verified_recall:.6f}"
+        )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Pretrained LLM SVA socket test.")
     parser.add_argument("--model-id", default="HuggingFaceTB/SmolLM2-135M-Instruct")
     parser.add_argument("--text-file", default=None)
+    parser.add_argument("--long-texts", action="store_true")
+    parser.add_argument("--n-texts", type=int, default=None)
+    parser.add_argument("--text-repeats", type=int, default=8)
     parser.add_argument("--max-length", type=int, default=128)
     parser.add_argument("--tables", type=int, default=16)
     parser.add_argument("--bits", type=int, default=10)
     parser.add_argument("--budget", type=int, default=64)
     parser.add_argument("--probe-radius", type=int, default=1)
     parser.add_argument("--seed", type=int, default=17)
+    parser.add_argument("--diagnose-topk", type=int, default=0)
+    parser.add_argument("--head-report-limit", type=int, default=0)
     parser.add_argument("--device", choices=["auto", "cpu", "cuda"], default="auto")
     parser.add_argument("--dtype", choices=["auto", "float32", "bfloat16", "float16"], default="auto")
     args = parser.parse_args()
@@ -276,7 +448,7 @@ def main() -> None:
     }
     dtype = dtype_map[args.dtype]
 
-    texts = load_texts(args.text_file)
+    texts = load_texts(args.text_file, args.long_texts, args.n_texts, args.text_repeats)
     tokenizer = AutoTokenizer.from_pretrained(args.model_id)
     batch = encode_batch(tokenizer, texts, args.max_length, device)
 
@@ -288,7 +460,15 @@ def main() -> None:
     full_logits = run_model(model, batch)
     full_loss = shifted_loss(full_logits, batch["input_ids"], batch["attention_mask"])
 
-    cfg = SVAConfig(args.tables, args.bits, args.budget, args.probe_radius, args.seed)
+    cfg = SVAConfig(
+        tables=args.tables,
+        bits=args.bits,
+        budget=args.budget,
+        probe_radius=args.probe_radius,
+        seed=args.seed,
+        diagnose_topk=args.diagnose_topk,
+        head_report_limit=args.head_report_limit,
+    )
     patch_model_with_sva(model, cfg)
     sva_logits = run_model(model, batch)
     sva_loss = shifted_loss(sva_logits, batch["input_ids"], batch["attention_mask"])
@@ -313,6 +493,7 @@ def main() -> None:
         print(f"{key},{value:.6f}")
     print(f"avg_summoned,{avg_summoned:.3f}")
     print(f"avg_verified,{avg_verified:.3f}")
+    print_diagnostics(cfg)
 
 
 if __name__ == "__main__":
