@@ -141,6 +141,42 @@ sva_probe1_16x12 0.9141  0.9745       406.6         16.0
 
 Interpretation: adjacent-bucket probing is the strongest robustness result so far. The tradeoff is that exact scoring currently happens over hundreds to about a thousand summoned candidates before the 16-item verifier budget. That makes the next cost question very specific: can SVA add a cheap pre-verifier or adaptive probing rule that preserves probe robustness while reducing raw summoned count?
 
+## Cheap Prefilter
+
+I added a projected-space prefilter. After SVA summons candidates, the query scores them in a small random feature space and keeps only a fixed number for exact full-dimensional scoring. The final verifier still emits a 16-candidate exact attention result.
+
+Query noise 0.10, 4096 stored pages, 16-candidate verifier budget, logit scale 16, 10-bit tables, probe radius 1, 32-dimensional prefilter:
+
+Random clustered keys:
+
+```text
+method                         top1    cos_teacher  avg_summoned  avg_exact_scored  avg_candidates
+sva_probe1_8x10                0.9468  0.9391       427.6         427.6             16.0
+sva_probe1_prefilter32d128_8x10 0.9468 0.9389       427.6         128.0             16.0
+sva_probe1_16x10               0.9888  0.9736       779.2         779.2             16.0
+sva_probe1_prefilter32d128_16x10 0.9888 0.9725      779.2         128.0             16.0
+```
+
+Entity-attribute binding keys:
+
+```text
+method                         top1    cos_teacher  avg_summoned  avg_exact_scored  avg_candidates
+sva_probe1_8x10                0.8877  0.9537       521.3         521.3             16.0
+sva_probe1_prefilter32d128_8x10 0.8867 0.9509       521.3         128.0             16.0
+sva_probe1_16x10               0.9272  0.9920       968.3         968.3             16.0
+sva_probe1_prefilter32d128_16x10 0.9233 0.9836      968.3         128.0             16.0
+```
+
+With 12-bit tables, the prefilter preserves the lower-cost probe variant too:
+
+```text
+method                         top1    cos_teacher  avg_summoned  avg_exact_scored  avg_candidates
+sva_probe1_16x12               0.9106  0.9732       407.1         407.1             16.0
+sva_probe1_prefilter32d128_16x12 0.9092 0.9707      407.1         128.0             16.0
+```
+
+Interpretation: the current best SVA shape is three-stage retrieval: summon broadly with adjacent buckets, use a cheap projected prefilter to reduce the pile, then run exact attention over the final candidates. This keeps most of the noisy-lookup robustness while making exact scoring much cheaper.
+
 ## Softer Teacher Stress
 
 4096 binding pages, 1024 queries, 16-candidate verifier budget, query noise 0.05, logit scale 8.

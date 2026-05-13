@@ -31,9 +31,11 @@ sva_16x10           0.9907  0.9721       16.0
 sva_24x10           0.9995  0.9859       16.0
 ```
 
-The newest robustness result is adjacent-bucket probing. Under noisy binding lookup, plain `sva_16x10` reached `top1=0.7124`; `sva_probe1_16x10` reached `top1=0.9263`, matching the full-attention teacher's `0.9287` on that setup while verifying 16 candidates.
+The newest robustness result is adjacent-bucket probing plus a cheap prefilter. Under noisy binding lookup, plain `sva_16x10` reached `top1=0.7124`; `sva_probe1_16x10` reached `top1=0.9263`, matching the full-attention teacher's `0.9287` on that setup while verifying 16 candidates.
 
-The next research step is to make probing cheaper: either learn better projections, use a cheap pre-verifier before exact scoring, or adapt the number of probed buckets to query uncertainty.
+With a 32-dimensional prefilter, `sva_probe1_prefilter32d128_16x10` kept `top1=0.9233` while reducing exact full-dimensional scoring from about 968 summoned pages to 128. That makes the working shape: summon broadly, cheap prefilter, exact verify.
+
+The next research step is to move this from static retrieval into a tiny causal sequence model.
 
 ## Files
 

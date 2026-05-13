@@ -222,17 +222,30 @@ def candidate_attention(
     candidates: np.ndarray,
     budget: int,
     logit_scale: float,
-) -> tuple[np.ndarray, int, int]:
+    prefilter_projection: np.ndarray | None = None,
+    prefilter_key_features: np.ndarray | None = None,
+    prefilter_budget: int = 0,
+) -> tuple[np.ndarray, int, int, int]:
     if candidates.size == 0:
-        return np.zeros(values.shape[1]), -1, 0
-    scores = logit_scale * (query @ keys[candidates].T)
+        return np.zeros(values.shape[1]), -1, 0, 0
+    exact_candidates = candidates
+    if (
+        prefilter_projection is not None
+        and prefilter_key_features is not None
+        and prefilter_budget > 0
+        and candidates.size > prefilter_budget
+    ):
+        query_features = query @ prefilter_projection.T
+        cheap_scores = query_features @ prefilter_key_features[candidates].T
+        exact_candidates = candidates[np.argsort(-cheap_scores)[:prefilter_budget]]
+    scores = logit_scale * (query @ keys[exact_candidates].T)
     order = np.argsort(-scores)
     if budget > 0:
         order = order[:budget]
-    chosen = candidates[order]
+    chosen = exact_candidates[order]
     chosen_scores = scores[order]
     weights = softmax(chosen_scores[None, :], axis=1)[0]
-    return weights @ values[chosen], int(chosen[0]), int(chosen.size)
+    return weights @ values[chosen], int(chosen[0]), int(chosen.size), int(exact_candidates.size)
 
 
 def cosine(a: np.ndarray, b: np.ndarray) -> float:
@@ -248,27 +261,35 @@ def evaluate_candidate_method(
     get_candidates,
     budget: int,
     logit_scale: float,
+    prefilter_projection: np.ndarray | None = None,
+    prefilter_key_features: np.ndarray | None = None,
+    prefilter_budget: int = 0,
 ) -> dict[str, float]:
     outputs = []
     top1 = []
     recall = []
     counts = []
     raw_counts = []
+    exact_counts = []
     for query, target in zip(queries, targets):
         candidates = get_candidates(query)
         recall.append(target in set(candidates.tolist()))
         raw_counts.append(candidates.size)
-        output, winner, count = candidate_attention(
+        output, winner, count, exact_count = candidate_attention(
             keys,
             values,
             query,
             candidates,
             budget,
             logit_scale,
+            prefilter_projection,
+            prefilter_key_features,
+            prefilter_budget,
         )
         outputs.append(output)
         top1.append(winner == target)
         counts.append(count)
+        exact_counts.append(exact_count)
     outputs_arr = np.stack(outputs)
     return {
         "recall": float(np.mean(recall)),
@@ -276,6 +297,7 @@ def evaluate_candidate_method(
         "cos_teacher": cosine(outputs_arr, teacher),
         "mse_teacher": float(np.mean((outputs_arr - teacher) ** 2)),
         "avg_summoned": float(np.mean(raw_counts)),
+        "avg_exact_scored": float(np.mean(exact_counts)),
         "avg_candidates": float(np.mean(counts)),
     }
 
@@ -316,6 +338,11 @@ def run_once(args: argparse.Namespace, seed: int) -> list[dict[str, str | float]
         keys, values, queries, targets = make_random_task(args, rng)
 
     teacher, teacher_top = exact_attention(keys, values, queries, args.logit_scale)
+    prefilter_projection = None
+    prefilter_key_features = None
+    if args.prefilter_dim > 0:
+        prefilter_projection = rng.normal(size=(args.prefilter_dim, keys.shape[1])) / math.sqrt(keys.shape[1])
+        prefilter_key_features = keys @ prefilter_projection.T
     rows: list[dict[str, str | float]] = [
         {
             "method": "full_attention",
@@ -324,6 +351,7 @@ def run_once(args: argparse.Namespace, seed: int) -> list[dict[str, str | float]
             "cos_teacher": 1.0,
             "mse_teacher": 0.0,
             "avg_summoned": float(keys.shape[0]),
+            "avg_exact_scored": float(keys.shape[0]),
             "avg_candidates": float(keys.shape[0]),
         }
     ]
@@ -354,6 +382,27 @@ def run_once(args: argparse.Namespace, seed: int) -> list[dict[str, str | float]
             args.logit_scale,
         )
         rows.append({"method": f"sva_{n_tables}x{args.bits}", **lsh_result})
+        if prefilter_projection is not None and prefilter_key_features is not None:
+            for prefilter_budget in args.prefilter_budgets:
+                filtered_result = evaluate_candidate_method(
+                    keys,
+                    values,
+                    queries,
+                    targets,
+                    teacher,
+                    lambda q, tables=tables, projections=projections: lsh_candidates(q, tables, projections),
+                    args.budget,
+                    args.logit_scale,
+                    prefilter_projection,
+                    prefilter_key_features,
+                    prefilter_budget,
+                )
+                rows.append(
+                    {
+                        "method": f"sva_prefilter{args.prefilter_dim}d{prefilter_budget}_{n_tables}x{args.bits}",
+                        **filtered_result,
+                    }
+                )
         for probe_radius in args.probe_radii:
             if probe_radius <= 0:
                 continue
@@ -373,6 +422,35 @@ def run_once(args: argparse.Namespace, seed: int) -> list[dict[str, str | float]
                 args.logit_scale,
             )
             rows.append({"method": f"sva_probe{probe_radius}_{n_tables}x{args.bits}", **probe_result})
+            if prefilter_projection is not None and prefilter_key_features is not None:
+                for prefilter_budget in args.prefilter_budgets:
+                    probe_filtered_result = evaluate_candidate_method(
+                        keys,
+                        values,
+                        queries,
+                        targets,
+                        teacher,
+                        lambda q, tables=tables, projections=projections, probe_radius=probe_radius: lsh_candidates(
+                            q,
+                            tables,
+                            projections,
+                            probe_radius,
+                        ),
+                        args.budget,
+                        args.logit_scale,
+                        prefilter_projection,
+                        prefilter_key_features,
+                        prefilter_budget,
+                    )
+                    rows.append(
+                        {
+                            "method": (
+                                f"sva_probe{probe_radius}_prefilter"
+                                f"{args.prefilter_dim}d{prefilter_budget}_{n_tables}x{args.bits}"
+                            ),
+                            **probe_filtered_result,
+                        }
+                    )
         if args.learned_pool > 0:
             train_queries, train_targets = sample_queries(
                 keys,
@@ -472,6 +550,8 @@ def main() -> None:
     parser.add_argument("--learned-train-queries", type=int, default=2048)
     parser.add_argument("--selection-count-penalty", type=float, default=0.0)
     parser.add_argument("--probe-radii", type=int, nargs="*", default=[])
+    parser.add_argument("--prefilter-dim", type=int, default=0)
+    parser.add_argument("--prefilter-budgets", type=int, nargs="*", default=[])
     args = parser.parse_args()
 
     all_rows = []
@@ -479,7 +559,7 @@ def main() -> None:
         all_rows.extend(run_once(args, args.seed + 1000 * trial))
 
     methods = list(dict.fromkeys(row["method"] for row in all_rows))
-    print("method,recall,top1,cos_teacher,mse_teacher,avg_summoned,avg_candidates")
+    print("method,recall,top1,cos_teacher,mse_teacher,avg_summoned,avg_exact_scored,avg_candidates")
     for method in methods:
         rows = [row for row in all_rows if row["method"] == method]
         print(
@@ -489,6 +569,7 @@ def main() -> None:
             f"{np.mean([float(r['cos_teacher']) for r in rows]):.4f},"
             f"{np.mean([float(r['mse_teacher']) for r in rows]):.6f},"
             f"{np.mean([float(r['avg_summoned']) for r in rows]):.1f},"
+            f"{np.mean([float(r['avg_exact_scored']) for r in rows]):.1f},"
             f"{np.mean([float(r['avg_candidates']) for r in rows]):.1f}"
         )
 
