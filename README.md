@@ -24,14 +24,16 @@ python experiments\\sva_kill_test.py --task binding --trials 2 --tables 8 16 24 
 On the 8192-page binding task with a 16-candidate verifier budget, SVA reaches near-full-attention top-1 recovery while reading only 16 candidates:
 
 ```text
-method          top1    cos_teacher  avg_candidates
-full_attention  1.0000  1.0000       8192.0
-coarse_bank     0.5552  0.5820       15.7
-sva_16x10       0.9907  0.9721       16.0
-sva_24x10       0.9995  0.9859       16.0
+method              top1    cos_teacher  avg_candidates
+full_attention      1.0000  1.0000       8192.0
+coarse_bank_verify  0.5552  0.5820       15.7
+sva_16x10           0.9907  0.9721       16.0
+sva_24x10           0.9995  0.9859       16.0
 ```
 
-The next research step is to replace random LSH projections with learned or adaptive projections that make the summoned set more semantic, then test the mechanism inside a tiny sequence model.
+The newest robustness result is adjacent-bucket probing. Under noisy binding lookup, plain `sva_16x10` reached `top1=0.7124`; `sva_probe1_16x10` reached `top1=0.9263`, matching the full-attention teacher's `0.9287` on that setup while verifying 16 candidates.
+
+The next research step is to make probing cheaper: either learn better projections, use a cheap pre-verifier before exact scoring, or adapt the number of probed buckets to query uncertainty.
 
 ## Files
 

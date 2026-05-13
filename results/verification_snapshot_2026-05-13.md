@@ -71,6 +71,76 @@ sva_24x10          0.8213  0.8879       16.0
 sva_32x10          0.8809  0.9426       16.0
 ```
 
+## Learned Table Selection
+
+I added a split-train selection variant. It samples a pool of random SVA tables, greedily chooses the tables that recover held-out training queries best, then evaluates on fresh queries.
+
+With query noise 0.10, 4096 stored pages, 16-candidate verifier budget, and 256 candidate tables in the selection pool:
+
+Random clustered keys:
+
+```text
+method             top1    cos_teacher  avg_summoned  avg_candidates
+sva_16x10          0.7783  0.7943       103.6         16.0
+sva_selected_16x10 0.7910  0.8067       109.9         16.0
+sva_32x10          0.9424  0.9284       192.3         16.0
+sva_selected_32x10 0.9512  0.9359       199.0         16.0
+```
+
+Entity-attribute binding keys:
+
+```text
+method             top1    cos_teacher  avg_summoned  avg_candidates
+sva_16x10          0.7207  0.8055       140.5         16.0
+sva_selected_16x10 0.7461  0.8191       139.7         16.0
+sva_32x10          0.8711  0.9366       261.4         16.0
+sva_selected_32x10 0.8901  0.9492       274.5         16.0
+```
+
+Interpretation: learned table selection is a real but modest improvement. It nudges recall and teacher cosine upward, especially under noisy lookup. It does not change the mechanism's cost profile enough by itself.
+
+## Adjacent-Bucket Probing
+
+I added a query-side probing variant. Instead of summoning only the exact LSH bucket for each table, the query also summons buckets one Hamming step away. The verifier still uses only the top 16 exact dot-product candidates.
+
+Query noise 0.10, 4096 stored pages, 16-candidate verifier budget, logit scale 16, 10-bit tables:
+
+Random clustered keys:
+
+```text
+method          top1    cos_teacher  avg_summoned  avg_candidates
+full_attention  0.9937  1.0000       4096.0        4096.0
+sva_8x10        0.5376  0.5838       53.8          16.0
+sva_probe1_8x10 0.9482  0.9377       431.9         16.0
+sva_16x10       0.7808  0.7989       102.1         16.0
+sva_probe1_16x10 0.9902 0.9741       773.4         16.0
+sva_24x10       0.8926  0.8888       150.8         16.0
+sva_probe1_24x10 0.9937 0.9775       1073.8        16.0
+```
+
+Entity-attribute binding keys:
+
+```text
+method          top1    cos_teacher  avg_summoned  avg_candidates
+full_attention  0.9287  1.0000       4096.0        4096.0
+sva_8x10        0.5068  0.5940       69.8          16.0
+sva_probe1_8x10 0.8960  0.9587       533.9         16.0
+sva_16x10       0.7124  0.8018       143.0         16.0
+sva_probe1_16x10 0.9263 0.9924       975.9         16.0
+sva_24x10       0.8213  0.8879       193.9         16.0
+sva_probe1_24x10 0.9282 0.9946       1264.6        16.0
+```
+
+With 12-bit tables, probing trades some recall for lower raw summoning cost:
+
+```text
+method           top1    cos_teacher  avg_summoned  avg_candidates
+sva_probe1_8x12  0.8101  0.8763       203.7         16.0
+sva_probe1_16x12 0.9141  0.9745       406.6         16.0
+```
+
+Interpretation: adjacent-bucket probing is the strongest robustness result so far. The tradeoff is that exact scoring currently happens over hundreds to about a thousand summoned candidates before the 16-item verifier budget. That makes the next cost question very specific: can SVA add a cheap pre-verifier or adaptive probing rule that preserves probe robustness while reducing raw summoned count?
+
 ## Softer Teacher Stress
 
 4096 binding pages, 1024 queries, 16-candidate verifier budget, query noise 0.05, logit scale 8.
