@@ -54,6 +54,8 @@ The full-window real-QK address sweep now matches SmolLM2's configured context w
 
 The million-token pressure simulation sharpened that result using empirical hit density from real 8192-token SmolLM2 Q/K samples. The best aggregate recall was `20 bits / 256 tables / radius 2` at `0.384905`, but it projected to about `39.6k` average candidates at a million tokens, with p95 about `129k`. In the rough 128-1024 candidate band, aggregate recall stayed around 1-2%. The next work is a learned or model-aware address code.
 
+The learned compressed-ranker test is the first strong follow-up. Training a small asymmetric Q/K ranker per layer/head on held-in query positions and evaluating held-out query positions reached aggregate top-16 recall `0.759781` with a 64-dimensional score and 256 verifier candidates, and `0.848338` with 512 verifier candidates. The next risk is held-out text generalization, then serving the learned score through an addressable lookup.
+
 ## Files
 
 - `experiments/sva_kill_test.py`: standalone toy benchmark.
@@ -62,10 +64,12 @@ The million-token pressure simulation sharpened that result using empirical hit 
 - `experiments/sva_pretrained_socket_test.py`: pretrained SmolLM2 attention-socket benchmark.
 - `experiments/sva_real_qk_address_sweep.py`: real-QK high-bit address sweep at the model's configured context window.
 - `experiments/sva_million_stream_sim.py`: million-token address-pressure simulation from real SmolLM2 8192-token Q/K samples.
+- `experiments/sva_learned_ranker_test.py`: learned compressed Q/K ranker test.
 - `experiments/sva_address_scaling.py`: address selectivity calculator for long contexts.
 - `modal_h100_trainable.py`: Modal H100 runner for the trainable benchmark.
 - `modal_h100_socket.py`: Modal H100 runner for the pretrained socket sweep.
 - `modal_h100_million_stream.py`: Modal H100 runner for the million-token address-pressure simulation.
+- `modal_h100_learned_ranker.py`: Modal H100 runner for the learned compressed-ranker test.
 - `scripts/start_modal_h100_background.ps1`: detached Modal launcher that writes run logs under `results/modal_runs/`.
 - `results/verification_snapshot_2026-05-13.md`: current kill-test results.
 - `results/trainable_recall_snapshot_2026-05-13.md`: H100 trainable-representation checkpoint.
@@ -74,6 +78,7 @@ The million-token pressure simulation sharpened that result using empirical hit 
 - `results/pretrained_prefilter_socket_snapshot_2026-05-13.md`: cheap-prefilter socket checkpoint.
 - `results/real_qk_address_8192_snapshot_2026-05-13.md`: SmolLM2 full-window real-QK address sweep.
 - `results/million_stream_snapshot_2026-05-13.md`: million-token address-pressure snapshot.
+- `results/learned_ranker_snapshot_2026-05-13.md`: learned compressed-ranker snapshot.
 - `notes/attention_replacement_findings.md`: broader research log leading to SVA.
 - `notes/million_token_scaling.md`: scaling target for million-token contexts.
 
@@ -83,6 +88,7 @@ The million-token pressure simulation sharpened that result using empirical hit 
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-trainable
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-socket -ModalFile modal_h100_socket.py
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-million-stream -ModalFile modal_h100_million_stream.py
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-learned-ranker -ModalFile modal_h100_learned_ranker.py
 ```
 
 The launcher uses `modal run --detach` and writes local metadata, stdout, stderr, and result files under `results/modal_runs/`.
