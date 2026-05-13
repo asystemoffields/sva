@@ -47,6 +47,7 @@ The next research step is to test SVA in a tiny trainable sequence model where k
 - `modal_h100_trainable.py`: Modal H100 runner for the trainable benchmark.
 - `scripts/start_modal_h100_background.ps1`: detached Modal launcher that writes run logs under `results/modal_runs/`.
 - `results/verification_snapshot_2026-05-13.md`: current kill-test results.
+- `results/trainable_recall_snapshot_2026-05-13.md`: H100 trainable-representation checkpoint.
 - `notes/attention_replacement_findings.md`: broader research log leading to SVA.
 
 ## H100 Run
