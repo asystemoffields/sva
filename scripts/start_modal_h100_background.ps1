@@ -1,5 +1,6 @@
 param(
-    [string]$Name = "sva-h100"
+    [string]$Name = "sva-h100",
+    [string]$ModalFile = "modal_h100_trainable.py"
 )
 
 $ErrorActionPreference = "Stop"
@@ -26,7 +27,7 @@ $Args = @(
     "--timestamps",
     "--write-result",
     $Result,
-    "modal_h100_trainable.py"
+    $ModalFile
 )
 
 $Process = Start-Process `
@@ -47,6 +48,7 @@ $Process = Start-Process `
     "stderr=$Stderr"
     "result=$Result"
     "command=modal $($Args -join ' ')"
+    "modal_file=$ModalFile"
 ) | Set-Content -Path $Meta -Encoding utf8
 
 Write-Output "Started $RunName"
