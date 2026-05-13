@@ -177,6 +177,21 @@ sva_probe1_prefilter32d128_16x12 0.9092 0.9707      407.1         128.0         
 
 Interpretation: the current best SVA shape is three-stage retrieval: summon broadly with adjacent buckets, use a cheap projected prefilter to reduce the pile, then run exact attention over the final candidates. This keeps most of the noisy-lookup robustness while making exact scoring much cheaper.
 
+## Causal Sequence Checkpoint
+
+I added `experiments/sva_causal_sequence_test.py`, which writes pages into an incremental causal cache and queries only prior pages.
+
+At 1024 tokens with an average prefix of 512 pages, query noise 0.10, radius-1 probing, 12-bit addresses, and 24 tables:
+
+```text
+method                                  top1_target  cos_teacher  avg_summoned  avg_exact_scored
+full_causal_attention                   0.9988       1.0000       512.0         512.0
+sva_causal_probe1_24x12                 0.9954       0.9962       53.8          53.8
+sva_causal_probe1_prefilter32d128_24x12 0.9957       0.9962       54.2          54.1
+```
+
+Interpretation: SVA transfers cleanly from static retrieval to an incremental causal-cache setting. The next risk is whether learned keys and queries preserve usable summon addresses in a tiny trainable model.
+
 ## Softer Teacher Stress
 
 4096 binding pages, 1024 queries, 16-candidate verifier budget, query noise 0.05, logit scale 8.

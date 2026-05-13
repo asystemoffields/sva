@@ -35,10 +35,13 @@ The newest robustness result is adjacent-bucket probing plus a cheap prefilter. 
 
 With a 32-dimensional prefilter, `sva_probe1_prefilter32d128_16x10` kept `top1=0.9233` while reducing exact full-dimensional scoring from about 968 summoned pages to 128. That makes the working shape: summon broadly, cheap prefilter, exact verify.
 
-The next research step is to move this from static retrieval into a tiny causal sequence model.
+The causal-cache test is now positive too. At 1024 tokens, `sva_causal_probe1_prefilter32d128_24x12` reached `top1=0.9957` with about 54 summoned prior pages on average, while full causal attention read about 512 prior pages on average in the same setup.
+
+The next research step is to test SVA in a tiny trainable sequence model where keys and queries are learned rather than synthetic.
 
 ## Files
 
 - `experiments/sva_kill_test.py`: standalone toy benchmark.
+- `experiments/sva_causal_sequence_test.py`: incremental causal-cache benchmark.
 - `results/verification_snapshot_2026-05-13.md`: current kill-test results.
 - `notes/attention_replacement_findings.md`: broader research log leading to SVA.
