@@ -56,6 +56,7 @@ The first random-projection prefilter reduced exact scoring but exposed the next
 - `experiments/sva_causal_sequence_test.py`: incremental causal-cache benchmark.
 - `experiments/sva_trainable_recall_test.py`: trainable modern-decoder recall benchmark.
 - `experiments/sva_pretrained_socket_test.py`: pretrained SmolLM2 attention-socket benchmark.
+- `experiments/sva_real_qk_address_sweep.py`: real-QK high-bit address sweep at the model's configured context window.
 - `experiments/sva_address_scaling.py`: address selectivity calculator for long contexts.
 - `modal_h100_trainable.py`: Modal H100 runner for the trainable benchmark.
 - `modal_h100_socket.py`: Modal H100 runner for the pretrained socket sweep.
