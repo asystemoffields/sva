@@ -158,6 +158,8 @@ The late-boundary sweep moves the current socket target to `late4`. Replacing on
 
 The `late4` robustness run held across 9 passkey cases at `32768` using three keys and start/middle/end placements. Aggregate answer NLL delta was `0.010875`, KL `0.005547`, top-1 agreement `0.968254`, and logit cosine `0.999889`. This makes the current production hypothesis compact: preserve full attention through layer `25`, socket SVA into layers `26-29`, and focus implementation work on replacing scan summon with an indexed path.
 
+The direct `early26` pressure check confirms that boundary. At `32768`, replacing layers `0-25` alone produced answer KL `1.531219` and logit cosine `0.745349`, nearly the same distribution drift as replacing all layers (`KL=1.562648`, cosine `0.743596`). Replacing only `26-29` stayed close to full attention (`KL=0.005527`, cosine `0.999898`) and reduced decode wall-clock in this scan harness, while prefill remained slower. The production path is therefore late-layer SVA plus faster summon, while early-layer replacement needs direct long-context/logit-preserving training to be worth reopening.
+
 ## Files
 
 - `experiments/sva_kill_test.py`: standalone toy benchmark.
@@ -235,6 +237,7 @@ The `late4` robustness run held across 9 passkey cases at `32768` using three ke
 - `modal_h100_passkey_layer_selective_language.py`: Modal H100 runner for layer-selective passkey answer sweeps.
 - `modal_h100_passkey_late_boundary_language.py`: Modal H100 runner for late-layer passkey answer boundary sweeps.
 - `modal_h100_passkey_late4_robustness.py`: Modal H100 runner for multi-key, multi-placement late4 passkey checks.
+- `modal_h100_passkey_early26_language.py`: Modal H100 runner for directly comparing `0-25`, all-layer, and `26-29` passkey answer drift.
 - `modal_h100_block_elevator.py`: Modal H100 runner for block-first SVA elevator benchmarking.
 - `modal_h100_block_hybrid.py`: Modal H100 runner for token/block hybrid SVA benchmarking.
 - `modal_h100_learned_hybrid_selector.py`: Modal H100 runner for learned token/block selector benchmarking.
@@ -330,6 +333,7 @@ The `late4` robustness run held across 9 passkey cases at `32768` using three ke
 - `results/passkey_layer_selective_language_snapshot_2026-05-14.md`: layer-selective full-answer passkey scoring.
 - `results/passkey_late_boundary_language_snapshot_2026-05-14.md`: late-layer boundary passkey answer sweep.
 - `results/passkey_late4_robustness_snapshot_2026-05-14.md`: multi-key, multi-placement late4 passkey robustness check.
+- `results/passkey_early26_language_snapshot_2026-05-14.md`: direct `0-25` versus all-layer versus `26-29` passkey answer comparison.
 - `results/hf_artifacts/sva-smollm2-135m-2x256-v1/`: local HF/GitHub-ready `2x256` SVA artifact bundle.
 - `results/hf_artifacts/sva-smollm2-135m-2x256-longctx-refresh-v1/`: local HF/GitHub-ready long-context refreshed `2x256` SVA artifact bundle.
 - `results/hf_artifacts/sva-smollm2-135m-2x256-attnweighted-v1/`: local HF/GitHub-ready attention-weighted long-context `2x256` SVA artifact bundle.
