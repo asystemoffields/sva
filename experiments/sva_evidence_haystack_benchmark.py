@@ -178,9 +178,18 @@ def span_hit(indices: torch.Tensor, start: int, end: int) -> float:
     return float(((indices >= start) & (indices < end)).any().item())
 
 
+def expand_candidates(indices: torch.Tensor, radius: int, context: int) -> torch.Tensor:
+    if indices.numel() == 0 or radius <= 0:
+        return indices
+    offsets = torch.arange(-radius, radius + 1, device=indices.device, dtype=torch.long)
+    expanded = indices[:, None] + offsets[None, :]
+    expanded = expanded[(expanded >= 0) & (expanded < context)]
+    return torch.unique(expanded)
+
+
 def evaluate_anchor_policy(
     *,
-    query_current: torch.Tensor,
+    query_all: torch.Tensor,
     key: torch.Tensor,
     q_low: torch.Tensor,
     k_low: torch.Tensor,
@@ -192,6 +201,8 @@ def evaluate_anchor_policy(
     shortlist: int,
     per_anchor_budget: int,
     final_budget: int,
+    rerank_mode: str,
+    expand_radius: int,
     key_start: int,
     key_end: int,
     needle_start: int,
@@ -203,7 +214,12 @@ def evaluate_anchor_policy(
     verified_key_hits = []
     verified_needle_hits = []
     candidate_counts = []
+    expanded_counts = []
     verified_counts = []
+    rerank_score_counts = []
+    candidate_key_hits = []
+    candidate_needle_hits = []
+    context = key.shape[1]
     for head_idx in range(head_count):
         candidates = union_candidates_for_head(
             q_low=q_low,
@@ -219,39 +235,68 @@ def evaluate_anchor_policy(
         candidate_counts.append(float(candidates.numel()))
         key_hits.append(span_hit(candidates, key_start, key_end))
         needle_hits.append(span_hit(candidates, needle_start, needle_end))
-        if candidates.numel() == 0:
-            verified = candidates
+        expanded = expand_candidates(candidates, expand_radius, context)
+        expanded_counts.append(float(expanded.numel()))
+        candidate_key_hits.append(span_hit(expanded, key_start, key_end))
+        candidate_needle_hits.append(span_hit(expanded, needle_start, needle_end))
+        if expanded.numel() == 0:
+            verified = expanded
+            rerank_score_counts.append(0.0)
         else:
-            scores = (key[head_idx, candidates].float() * query_current[head_idx].float()[None, :]).sum(dim=-1) * scaling
+            if rerank_mode == "current":
+                scores = (key[head_idx, expanded].float() * query_all[head_idx, -1].float()[None, :]).sum(dim=-1) * scaling
+                rerank_score_counts.append(float(expanded.numel()))
+            elif rerank_mode == "max_anchor":
+                anchor_query = query_all[head_idx, anchor_positions].float()
+                scores = torch.einsum("ad,kd->ak", anchor_query, key[head_idx, expanded].float()) * scaling
+                scores = scores.max(dim=0).values
+                rerank_score_counts.append(float(expanded.numel() * len(anchor_positions)))
+            else:
+                raise ValueError(f"Unknown rerank mode: {rerank_mode}")
             keep = scores.topk(min(final_budget, scores.numel()), dim=-1).indices
-            verified = candidates[keep]
+            verified = expanded[keep]
         verified_counts.append(float(verified.numel()))
         verified_key_hits.append(span_hit(verified, key_start, key_end))
         verified_needle_hits.append(span_hit(verified, needle_start, needle_end))
 
     return {
         "avg_candidates": float(torch.tensor(candidate_counts).mean().item()),
+        "avg_expanded_candidates": float(torch.tensor(expanded_counts).mean().item()),
         "avg_verified": float(torch.tensor(verified_counts).mean().item()),
+        "avg_rerank_scores": float(torch.tensor(rerank_score_counts).mean().item()),
         "summoned_key_hit": float(torch.tensor(key_hits).mean().item()),
         "summoned_needle_hit": float(torch.tensor(needle_hits).mean().item()),
+        "candidate_key_hit": float(torch.tensor(candidate_key_hits).mean().item()),
+        "candidate_needle_hit": float(torch.tensor(candidate_needle_hits).mean().item()),
         "verified_key_hit": float(torch.tensor(verified_key_hits).mean().item()),
         "verified_needle_hit": float(torch.tensor(verified_needle_hits).mean().item()),
     }
 
 
 def add_summary(
-    aggregate: dict[tuple[str, int, str, int], dict[str, float]],
+    aggregate: dict[tuple[str, int, str, int, str, int], dict[str, float]],
     row: dict[str, float | int | str],
 ) -> None:
-    key = (str(row["policy"]), int(row["context"]), str(row["placement"]), int(row["anchor_count"]))
+    key = (
+        str(row["policy"]),
+        int(row["context"]),
+        str(row["placement"]),
+        int(row["anchor_count"]),
+        str(row["rerank_mode"]),
+        int(row["expand_radius"]),
+    )
     bucket = aggregate.setdefault(
         key,
         {
             "count": 0.0,
             "avg_candidates": 0.0,
+            "avg_expanded_candidates": 0.0,
             "avg_verified": 0.0,
+            "avg_rerank_scores": 0.0,
             "summoned_key_hit": 0.0,
             "summoned_needle_hit": 0.0,
+            "candidate_key_hit": 0.0,
+            "candidate_needle_hit": 0.0,
             "verified_key_hit": 0.0,
             "verified_needle_hit": 0.0,
             "teacher_key_mass": 0.0,
@@ -276,6 +321,8 @@ def main() -> None:
     parser.add_argument("--shortlist", type=int, default=8192)
     parser.add_argument("--budget", type=int, default=2048)
     parser.add_argument("--anchor-counts", default="1,4,8,16")
+    parser.add_argument("--rerank-modes", default="current")
+    parser.add_argument("--expand-radii", default="0")
     parser.add_argument("--topk", type=int, default=64)
     parser.add_argument("--assign-chunk-size", type=int, default=8192)
     parser.add_argument("--attn-implementation", default="eager")
@@ -309,6 +356,8 @@ def main() -> None:
     contexts = comma_ints(args.contexts)
     placements = comma_strings(args.placements)
     anchor_counts = comma_ints(args.anchor_counts)
+    rerank_modes = comma_strings(args.rerank_modes)
+    expand_radii = comma_ints(args.expand_radii)
     layers = parse_layer_list(args.layers, len(model.model.layers))
     layers = layers if layers is not None else list(range(len(model.model.layers)))
 
@@ -319,9 +368,11 @@ def main() -> None:
     print(f"contexts,{args.contexts}", flush=True)
     print(f"placements,{args.placements}", flush=True)
     print(f"layers,{args.layers}", flush=True)
+    print(f"rerank_modes,{args.rerank_modes}", flush=True)
+    print(f"expand_radii,{args.expand_radii}", flush=True)
     print(f"artifact_profile,{bundle.manifest.get('profile_name')}", flush=True)
 
-    aggregate: dict[tuple[str, int, str, int], dict[str, float]] = {}
+    aggregate: dict[tuple[str, int, str, int, str, int], dict[str, float]] = {}
     for context in contexts:
         for placement in placements:
             case = build_evidence_case(tokenizer, context, args.key, placement, device)
@@ -351,38 +402,44 @@ def main() -> None:
                         "full": args.budget,
                     }
                     for policy, per_anchor_budget in policies.items():
-                        metrics = evaluate_anchor_policy(
-                            query_current=query_current,
-                            key=key_all,
-                            q_low=q_low,
-                            k_low=k_low,
-                            codebooks=codebooks,
-                            codes=codes,
-                            rank_dim=bundle.rank_dim,
-                            scaling=scaling,
-                            anchor_positions=anchor_positions,
-                            shortlist=args.shortlist,
-                            per_anchor_budget=per_anchor_budget,
-                            final_budget=args.budget,
-                            key_start=case.key_start,
-                            key_end=case.key_end,
-                            needle_start=case.needle_start,
-                            needle_end=case.needle_end,
-                        )
-                        row = {
-                            "policy": policy,
-                            "context": context,
-                            "placement": placement,
-                            "layer": layer_idx,
-                            "anchor_count": actual_anchor_count,
-                            "per_anchor_budget": per_anchor_budget,
-                            "key_start": case.key_start,
-                            "key_end": case.key_end,
-                            **teacher,
-                            **metrics,
-                        }
-                        emit("evidence_haystack_row", row)
-                        add_summary(aggregate, row)
+                        for rerank_mode in rerank_modes:
+                            for expand_radius in expand_radii:
+                                metrics = evaluate_anchor_policy(
+                                    query_all=query_all,
+                                    key=key_all,
+                                    q_low=q_low,
+                                    k_low=k_low,
+                                    codebooks=codebooks,
+                                    codes=codes,
+                                    rank_dim=bundle.rank_dim,
+                                    scaling=scaling,
+                                    anchor_positions=anchor_positions,
+                                    shortlist=args.shortlist,
+                                    per_anchor_budget=per_anchor_budget,
+                                    final_budget=args.budget,
+                                    rerank_mode=rerank_mode,
+                                    expand_radius=expand_radius,
+                                    key_start=case.key_start,
+                                    key_end=case.key_end,
+                                    needle_start=case.needle_start,
+                                    needle_end=case.needle_end,
+                                )
+                                row = {
+                                    "policy": policy,
+                                    "context": context,
+                                    "placement": placement,
+                                    "layer": layer_idx,
+                                    "anchor_count": actual_anchor_count,
+                                    "per_anchor_budget": per_anchor_budget,
+                                    "rerank_mode": rerank_mode,
+                                    "expand_radius": expand_radius,
+                                    "key_start": case.key_start,
+                                    "key_end": case.key_end,
+                                    **teacher,
+                                    **metrics,
+                                }
+                                emit("evidence_haystack_row", row)
+                                add_summary(aggregate, row)
                 del query_all, key_all, q_low, k_low, codebooks, codes
                 if device.type == "cuda":
                     torch.cuda.empty_cache()
@@ -390,10 +447,12 @@ def main() -> None:
             if device.type == "cuda":
                 torch.cuda.empty_cache()
 
-    for (policy, context, placement, anchor_count), bucket in sorted(aggregate.items()):
+    for (policy, context, placement, anchor_count, rerank_mode, expand_radius), bucket in sorted(aggregate.items()):
         count = max(bucket["count"], 1.0)
         avg_candidates = bucket["avg_candidates"] / count
+        avg_expanded_candidates = bucket["avg_expanded_candidates"] / count
         avg_verified = bucket["avg_verified"] / count
+        avg_rerank_scores = bucket["avg_rerank_scores"] / count
         emit(
             "evidence_haystack_summary",
             {
@@ -401,11 +460,18 @@ def main() -> None:
                 "context": context,
                 "placement": placement,
                 "anchor_count": anchor_count,
+                "rerank_mode": rerank_mode,
+                "expand_radius": expand_radius,
                 "avg_candidates": avg_candidates,
+                "avg_expanded_candidates": avg_expanded_candidates,
                 "avg_verified": avg_verified,
+                "avg_rerank_scores": avg_rerank_scores,
                 "read_reduction": context / max(avg_verified, 1e-9),
+                "score_reduction": context / max(avg_rerank_scores, 1e-9),
                 "summoned_key_hit": bucket["summoned_key_hit"] / count,
                 "summoned_needle_hit": bucket["summoned_needle_hit"] / count,
+                "candidate_key_hit": bucket["candidate_key_hit"] / count,
+                "candidate_needle_hit": bucket["candidate_needle_hit"] / count,
                 "verified_key_hit": bucket["verified_key_hit"] / count,
                 "verified_needle_hit": bucket["verified_needle_hit"] / count,
                 "teacher_key_mass": bucket["teacher_key_mass"] / count,
