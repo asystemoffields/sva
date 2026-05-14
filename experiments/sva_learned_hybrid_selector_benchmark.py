@@ -519,6 +519,8 @@ def main() -> None:
 
     for (selector_name, split, context, block_size, block_budget), bucket in sorted(aggregate.items()):
         count = max(bucket["count"], 1.0)
+        avg_tokens_read = bucket["avg_tokens_read"] / count
+        avg_segments = bucket["avg_segments"] / count
         emit(
             "learned_hybrid_summary",
             {
@@ -528,10 +530,10 @@ def main() -> None:
                 "block_size": block_size,
                 "block_budget": block_budget,
                 "token_fraction": bucket["token_fraction"] / count,
-                "avg_tokens_read": bucket["avg_tokens_read"] / count,
-                "read_reduction": bucket["read_reduction"] / count,
-                "avg_segments": bucket["avg_segments"] / count,
-                "segment_reduction": bucket["segment_reduction"] / count,
+                "avg_tokens_read": avg_tokens_read,
+                "read_reduction": context / max(avg_tokens_read, 1e-9),
+                "avg_segments": avg_segments,
+                "segment_reduction": min(args.token_budget, context) / max(avg_segments, 1e-9),
                 "top16_recall": bucket["top16_recall"] / count,
                 "output_cosine": bucket["output_cosine"] / count,
                 "relative_error": bucket["relative_error"] / count,

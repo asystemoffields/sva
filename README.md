@@ -124,6 +124,8 @@ The first block-elevator benchmark tested a more kernel-shaped SVA path: summon 
 
 The first token/block hybrid run found complementarity. With the same `2048` average value reads at `131072`, token SVA reached `output_cosine=0.944623` and `relative_error=0.457266`; block `64 x 32` reached `0.969223` and `0.270862`; an oracle selector between token and block reached `0.986559` and `0.165284` while reducing scattered segments from `2048` to about `853`. A cheap entropy selector improved exact-key survival over block-only but left much of the oracle gap open. The next target is a learned selector, then a hybrid serving-shaped passkey benchmark.
 
+The learned selector is positive on held-out synthetic layer outputs. A tiny MLP trained on cheap pre-verifier features reached `train_accuracy=0.943673` and transferred to a different held-out document. At `131072`, learned `128 x 16` improved relative error from token SVA's `0.570985` and block-only `0.250723` to `0.179351`, with about `599` average contiguous/scattered segments instead of `2048` scattered token segments. At `32768`, learned `128 x 16` reached `relative_error=0.106382`, close to the oracle's `0.096472`. The next sharp test is language-facing: socket this dispatcher into the passkey benchmark and see whether it preserves exact retrieval while improving long-context diffuse output.
+
 ## Files
 
 - `experiments/sva_kill_test.py`: standalone toy benchmark.
@@ -256,6 +258,7 @@ The first token/block hybrid run found complementarity. With the same `2048` ave
 - `results/passkey_language_snapshot_2026-05-14.md`: first passkey-style language stress test for SVA decode policy.
 - `results/block_elevator_snapshot_2026-05-14.md`: block-first SVA elevator and local statement benchmark snapshot.
 - `results/block_hybrid_snapshot_2026-05-14.md`: token/block hybrid selector benchmark snapshot.
+- `results/learned_hybrid_selector_snapshot_2026-05-14.md`: learned token/block selector benchmark snapshot.
 - `results/hf_artifacts/sva-smollm2-135m-2x256-v1/`: local HF/GitHub-ready `2x256` SVA artifact bundle.
 - `notes/attention_replacement_findings.md`: broader research log leading to SVA.
 - `notes/hierarchical_tree_sva.md`: side-track notes for hierarchical chunk/tree SVA.
