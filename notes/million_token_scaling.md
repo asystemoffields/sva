@@ -64,6 +64,8 @@ The first language-facing attention-weighted profile router partially transfers 
 
 The mixed-strength attention-weighted sweep says the `32768` issue is not solved by weakening the evidence boost. Boost `1/2/4` reached `0.334068/0.480951/0.593440` NLL delta at `32768`, while the strong effective boost `16` reached `0.152243`. At `16384`, boost `2` was best at `0.021849`. The likely mismatch is now between aggregate teacher top-k recall and exact passkey evidence survival.
 
+The final-query passkey key-survival diagnostic found low but similar survival across profiles at `32768`: original `0.148148`, plain refresh `0.137037`, boost2 `0.133333`, strong attention `0.140741`. Verified survival equals summoned survival, so the measured final-query loss is summon-side. The profile differences are too small to explain the language NLL spread, which points to accumulated prefill drift rather than only final-query evidence retrieval.
+
 ## Million-Token Constraint
 
 At a 1,000,000-token context, average prefix length is about 500,000. A usable replacement should keep exact full-dimensional QK scoring in the rough range of 128 to 1024 candidates per query.
@@ -133,11 +135,11 @@ The important refinement is distribution matching. High code entropy can coincid
 
 ## Next Verification Step
 
-The next architectural test is passkey-specific evidence survival:
+The next architectural test is passkey prefill drift:
 
-- keep the exact verifier unchanged
-- compare original, plain refreshed, boost2 attention-weighted, and strong attention-weighted profiles
-- measure whether the exact passkey token positions are summoned and verified by layer/head/query
-- separate summon miss from verifier miss at the final answer query
+- compare full vs SVA logits at the final prompt position before decoding
+- separate first-token answer NLL from later decode-token NLL
+- compare original, plain refreshed, boost2 attention-weighted, and strong attention-weighted profiles at `16384/32768`
+- keep prefill stats beside logit KL/cosine so representation drift can be separated from final-query summon loss
 - track recall, evidence survival, answer NLL, score distortion, normalized code entropy, max code load, value reads, and wall time
 - keep replacing scan prefill with indexed/elevator summon

@@ -144,7 +144,9 @@ Attention-weighted refresh is the first positive evidence-aware catalog result. 
 
 The language-facing attention-weighted profile router gives a mixed result. With original profile at `8192`, strong attention-weighted profile at `16384/32768`, and scan `8192/2048`, passkey answer NLL deltas were `0.070947`, `0.024752`, and `0.152243`. This improves over the plain refreshed profile at `16384` (`0.042013` to `0.024752`) but regresses at `32768` (`0.138533` to `0.152243`).
 
-The mixed-strength attention-weighted sweep sharpened the diagnosis. Boost `2` is best at `16384` (`0.021849` NLL delta), but lower boosts make `32768` worse: boost `1/2/4` reached `0.334068/0.480951/0.593440`, while strong effective boost `16` reached `0.152243`. The next sharp move is passkey-specific key-survival measurement: determine whether the early passkey evidence is missed by summon or lost by verifier/rerank under the same `8192/2048` deployment budget.
+The mixed-strength attention-weighted sweep sharpened the diagnosis. Boost `2` is best at `16384` (`0.021849` NLL delta), but lower boosts make `32768` worse: boost `1/2/4` reached `0.334068/0.480951/0.593440`, while strong effective boost `16` reached `0.152243`.
+
+The passkey key-survival diagnostic points to prefill drift. At `32768`, final-query key survival is low for every profile but close across profiles: original `0.148148`, plain refresh `0.137037`, boost2 `0.133333`, strong attention `0.140741`. Since verified survival equals summoned survival in this setup, the final-query loss is summon-side, but the profile differences are too small to explain the larger language NLL spread. The next sharp move is measuring full-vs-SVA prefill drift directly: first answer-token NLL, final-prompt logit KL/cosine, and profile-specific prefill stats.
 
 ## Files
 
@@ -217,6 +219,7 @@ The mixed-strength attention-weighted sweep sharpened the diagnosis. Boost `2` i
 - `modal_h100_passkey_profile_router.py`: Modal H100 runner for passkey language tests with context-routed SVA profiles.
 - `modal_h100_passkey_attention_weighted_router.py`: Modal H100 runner for passkey language tests with the attention-weighted long-context profile.
 - `modal_h100_attention_weighted_router_sweep.py`: Modal H100 runner for attention-weighted boost export plus passkey router sweeps.
+- `modal_h100_passkey_key_survival_profiles.py`: Modal H100 runner for profile-by-profile passkey key-survival diagnostics.
 - `modal_h100_block_elevator.py`: Modal H100 runner for block-first SVA elevator benchmarking.
 - `modal_h100_block_hybrid.py`: Modal H100 runner for token/block hybrid SVA benchmarking.
 - `modal_h100_learned_hybrid_selector.py`: Modal H100 runner for learned token/block selector benchmarking.
@@ -306,6 +309,7 @@ The mixed-strength attention-weighted sweep sharpened the diagnosis. Boost `2` i
 - `results/attention_weighted_refresh_snapshot_2026-05-14.md`: held-out attention-weighted refresh benchmark snapshot.
 - `results/passkey_attention_weighted_router_snapshot_2026-05-14.md`: language-facing passkey test for the attention-weighted routed profile.
 - `results/attention_weighted_router_sweep_snapshot_2026-05-14.md`: mixed-strength attention-weighted routed profile sweep.
+- `results/passkey_key_survival_profiles_snapshot_2026-05-14.md`: final-query passkey evidence survival across routed profiles.
 - `results/hf_artifacts/sva-smollm2-135m-2x256-v1/`: local HF/GitHub-ready `2x256` SVA artifact bundle.
 - `results/hf_artifacts/sva-smollm2-135m-2x256-longctx-refresh-v1/`: local HF/GitHub-ready long-context refreshed `2x256` SVA artifact bundle.
 - `results/hf_artifacts/sva-smollm2-135m-2x256-attnweighted-v1/`: local HF/GitHub-ready attention-weighted long-context `2x256` SVA artifact bundle.
@@ -370,6 +374,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_bac
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-export-attnweighted-artifact -ModalFile modal_h100_export_attention_weighted_artifact.py
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-passkey-attnweighted-router -ModalFile modal_h100_passkey_attention_weighted_router.py
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-attnweighted-router-sweep -ModalFile modal_h100_attention_weighted_router_sweep.py
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-passkey-key-survival-profiles -ModalFile modal_h100_passkey_key_survival_profiles.py
 ```
 
 The launcher uses `modal run --detach` and writes local metadata, stdout, stderr, and result files under `results/modal_runs/`.
