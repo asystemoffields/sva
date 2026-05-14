@@ -156,6 +156,8 @@ The full answer test transfers the `late10` signal. At `32768`, all-layer SVA ha
 
 The late-boundary sweep moves the current socket target to `late4`. Replacing only layers `26-29` gave the lowest KL at both tested contexts: at `32768`, answer NLL delta `0.023928`, KL `0.005527`, top-1 agreement `1.000000`, and logit cosine `0.999898`. Larger late sockets sometimes improved gold answer NLL, but they drifted farther from full attention. The next run tests `late4` across multiple passkeys and passkey placements.
 
+The `late4` robustness run held across 9 passkey cases at `32768` using three keys and start/middle/end placements. Aggregate answer NLL delta was `0.010875`, KL `0.005547`, top-1 agreement `0.968254`, and logit cosine `0.999889`. This makes the current production hypothesis compact: preserve full attention through layer `25`, socket SVA into layers `26-29`, and focus implementation work on replacing scan summon with an indexed path.
+
 ## Files
 
 - `experiments/sva_kill_test.py`: standalone toy benchmark.
@@ -327,6 +329,7 @@ The late-boundary sweep moves the current socket target to `late4`. Replacing on
 - `results/passkey_layer_selective_prefill_snapshot_2026-05-14.md`: layer-selective final-prompt passkey prefill drift.
 - `results/passkey_layer_selective_language_snapshot_2026-05-14.md`: layer-selective full-answer passkey scoring.
 - `results/passkey_late_boundary_language_snapshot_2026-05-14.md`: late-layer boundary passkey answer sweep.
+- `results/passkey_late4_robustness_snapshot_2026-05-14.md`: multi-key, multi-placement late4 passkey robustness check.
 - `results/hf_artifacts/sva-smollm2-135m-2x256-v1/`: local HF/GitHub-ready `2x256` SVA artifact bundle.
 - `results/hf_artifacts/sva-smollm2-135m-2x256-longctx-refresh-v1/`: local HF/GitHub-ready long-context refreshed `2x256` SVA artifact bundle.
 - `results/hf_artifacts/sva-smollm2-135m-2x256-attnweighted-v1/`: local HF/GitHub-ready attention-weighted long-context `2x256` SVA artifact bundle.

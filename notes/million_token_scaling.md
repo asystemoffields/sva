@@ -74,6 +74,8 @@ The full answer test confirms the `late10` direction at `32768`. All-layer SVA h
 
 The late-boundary sweep sharpens that to `late4`. Socketing only layers `26-29` reached 32K answer NLL delta `0.023928`, KL `0.005527`, top-1 agreement `1.000000`, and logit cosine `0.999898`. Larger late sockets can improve the target passkey NLL, but `late4` is closer to the full-attention distribution and is cheaper to socket.
 
+The `late4` robustness check held across 9 cases: three passkeys times start/middle/end placement at 32K. Mean answer NLL delta was `0.010875`, mean KL was `0.005547`, mean top-1 agreement was `0.968254`, and mean logit cosine was `0.999889`. The current production hypothesis is now simple: full attention through layer `25`, SVA in layers `26-29`, exact verification over summoned tokens, and indexed summon replacing scan.
+
 ## Million-Token Constraint
 
 At a 1,000,000-token context, average prefix length is about 500,000. A usable replacement should keep exact full-dimensional QK scoring in the rough range of 128 to 1024 candidates per query.
@@ -143,10 +145,9 @@ The important refinement is distribution matching. High code entropy can coincid
 
 ## Next Verification Step
 
-The next architectural test is layer-selective answer quality:
+The next architectural test is broader late4 quality:
 
-- test `late4` across multiple passkeys and start/middle/end placements at 32K
 - keep strong attention as the current long-context profile
-- carry `late4` into broader non-passkey language/retrieval tests if robustness holds
+- carry `late4` into broader non-passkey language/retrieval tests
 - track recall, evidence survival, answer NLL, score distortion, normalized code entropy, max code load, value reads, and wall time
 - keep replacing scan prefill with indexed/elevator summon
