@@ -1,0 +1,155 @@
+{
+  "format": "sva_residual_output_adapter_v1",
+  "model_id": "HuggingFaceTB/SmolLM2-135M-Instruct",
+  "artifact_dir": "results/hf_artifacts/sva-smollm2-135m-2x256-attnweighted-v1",
+  "socket_layers": [
+    26,
+    27,
+    28,
+    29
+  ],
+  "shortlist": 512,
+  "budget": 128,
+  "query_chunk_size": 128,
+  "summon_mode": "scan",
+  "adapter_rank": 16,
+  "adapter_scale": 1.0,
+  "distill_steps": 24,
+  "lr": 0.001,
+  "temperature": 1.0,
+  "gold_ce_weight": 0.01,
+  "target": "answer",
+  "train_contexts": "32768",
+  "train_keys": "731942,184029",
+  "eval_keys": "905317",
+  "train_placements": "start,middle",
+  "eval_placements": "start,middle,end",
+  "results": [
+    {
+      "phase": "baseline_train",
+      "context": 32768,
+      "key": "731942",
+      "placement": "start",
+      "final_kl_to_full": 0.07667350769042969,
+      "final_top1_agreement": 1.0,
+      "final_logit_cosine": 0.9983344078063965
+    },
+    {
+      "phase": "baseline_train",
+      "context": 32768,
+      "key": "731942",
+      "placement": "middle",
+      "final_kl_to_full": 0.08117043972015381,
+      "final_top1_agreement": 0.8571429252624512,
+      "final_logit_cosine": 0.9989749193191528
+    },
+    {
+      "phase": "baseline_train",
+      "context": 32768,
+      "key": "184029",
+      "placement": "start",
+      "final_kl_to_full": 0.05351460725069046,
+      "final_top1_agreement": 0.7142857313156128,
+      "final_logit_cosine": 0.9992557764053345
+    },
+    {
+      "phase": "baseline_train",
+      "context": 32768,
+      "key": "184029",
+      "placement": "middle",
+      "final_kl_to_full": 0.09522570669651031,
+      "final_top1_agreement": 0.7142857313156128,
+      "final_logit_cosine": 0.9991047382354736
+    },
+    {
+      "phase": "baseline_eval",
+      "context": 32768,
+      "key": "905317",
+      "placement": "start",
+      "final_kl_to_full": 0.06603039801120758,
+      "final_top1_agreement": 0.8571429252624512,
+      "final_logit_cosine": 0.9974581599235535
+    },
+    {
+      "phase": "baseline_eval",
+      "context": 32768,
+      "key": "905317",
+      "placement": "middle",
+      "final_kl_to_full": 0.0508267842233181,
+      "final_top1_agreement": 0.8571429252624512,
+      "final_logit_cosine": 0.9981749653816223
+    },
+    {
+      "phase": "baseline_eval",
+      "context": 32768,
+      "key": "905317",
+      "placement": "end",
+      "final_kl_to_full": 0.040854789316654205,
+      "final_top1_agreement": 1.0,
+      "final_logit_cosine": 0.998701274394989
+    },
+    {
+      "phase": "distilled_train",
+      "context": 32768,
+      "key": "731942",
+      "placement": "start",
+      "final_kl_to_full": 0.02389608882367611,
+      "final_top1_agreement": 0.8571429252624512,
+      "final_logit_cosine": 0.9992210268974304
+    },
+    {
+      "phase": "distilled_train",
+      "context": 32768,
+      "key": "731942",
+      "placement": "middle",
+      "final_kl_to_full": 0.03085777722299099,
+      "final_top1_agreement": 1.0,
+      "final_logit_cosine": 0.9993466138839722
+    },
+    {
+      "phase": "distilled_train",
+      "context": 32768,
+      "key": "184029",
+      "placement": "start",
+      "final_kl_to_full": 0.02627190575003624,
+      "final_top1_agreement": 1.0,
+      "final_logit_cosine": 0.9994850158691406
+    },
+    {
+      "phase": "distilled_train",
+      "context": 32768,
+      "key": "184029",
+      "placement": "middle",
+      "final_kl_to_full": 0.037087131291627884,
+      "final_top1_agreement": 0.8571429252624512,
+      "final_logit_cosine": 0.999443769454956
+    },
+    {
+      "phase": "distilled_eval",
+      "context": 32768,
+      "key": "905317",
+      "placement": "start",
+      "final_kl_to_full": 0.0368339866399765,
+      "final_top1_agreement": 1.0,
+      "final_logit_cosine": 0.9972966313362122
+    },
+    {
+      "phase": "distilled_eval",
+      "context": 32768,
+      "key": "905317",
+      "placement": "middle",
+      "final_kl_to_full": 0.010723588988184929,
+      "final_top1_agreement": 1.0,
+      "final_logit_cosine": 0.9995157718658447
+    },
+    {
+      "phase": "distilled_eval",
+      "context": 32768,
+      "key": "905317",
+      "placement": "end",
+      "final_kl_to_full": 0.01434321515262127,
+      "final_top1_agreement": 0.8571429252624512,
+      "final_logit_cosine": 0.9988715648651123
+    }
+  ]
+}

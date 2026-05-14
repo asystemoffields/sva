@@ -166,7 +166,9 @@ The first SVA-active fine-tuning probe is positive. Training `110592` tiny resid
 
 The saved-adapter full answer-decode panel kept the adaptation signal, but the gain is smaller than the final-prompt result. On 9 held-out 32K passkey cases at `512/128`, unadapted SVA reached answer KL `0.080839`, top-1 agreement `0.809524`, and logit cosine `0.998957`; adapted SVA improved those to KL `0.070306`, top-1 `0.825397`, and cosine `0.999289`, with the same `256x` decode exact-read reduction in the SVA layers. That result motivated answer-token decode distillation over multiple keys and placements.
 
-Answer-token distillation is the strongest tight-budget fidelity result so far. Training the same adapter on all answer-token logits cut held-out answer-token KL from `0.052571` to `0.019472`. On the 9-case full answer-decode panel, unadapted `512/128` SVA reached answer KL `0.080789`, top-1 `0.809524`, and cosine `0.998958`; answer-distilled SVA improved those to KL `0.027706`, top-1 `0.920635`, and cosine `0.999429` at the same `256x` decode exact-read reduction. Gold-answer NLL moved from `-0.012770` versus full to `+0.065083`, so the next objective should balance answer-token KL with a small gold-answer CE term to optimize both drop-in fidelity and retrieval pressure.
+Answer-token distillation is the strongest tight-budget fidelity result so far. Training the same adapter on all answer-token logits cut held-out answer-token KL from `0.052571` to `0.019472`. On the 9-case full answer-decode panel, unadapted `512/128` SVA reached answer KL `0.080789`, top-1 `0.809524`, and cosine `0.998958`; answer-distilled SVA improved those to KL `0.027706`, top-1 `0.920635`, and cosine `0.999429` at the same `256x` decode exact-read reduction. Gold-answer NLL moved from `-0.012770` versus full to `+0.065083`.
+
+Combining answer-token KL with a small gold-answer CE term is the strongest tight-budget adaptation result so far. With objective `answer_KL + 0.01 * gold_CE`, held-out answer-token KL landed at `0.020634`, close to pure answer-token distillation. On the 9-case full answer-decode panel, the combined adapter improved over unadapted `512/128` SVA from answer KL `0.080711` to `0.030835`, top-1 `0.809524` to `0.936508`, cosine `0.998966` to `0.999417`, and gold-answer NLL delta `-0.013716` to `-0.505290`, while preserving the same `256x` decode exact-read reduction. The next target is a CE-weight sweep around `0.01`.
 
 ## Files
 
@@ -253,6 +255,8 @@ Answer-token distillation is the strongest tight-budget fidelity result so far. 
 - `modal_h100_late4_adapter_answer.py`: Modal H100 runner for full answer-decode validation of the saved tight-budget late4 adapter.
 - `modal_h100_late4_answer_distill.py`: Modal H100 runner for tight-budget late4 answer-token distillation.
 - `modal_h100_late4_answerdistill_adapter_answer.py`: Modal H100 runner for answer-decode validation of the answer-distilled late4 adapter.
+- `modal_h100_late4_answer_ce_distill.py`: Modal H100 runner for tight-budget late4 answer-token KL plus gold-CE distillation.
+- `modal_h100_late4_answerce_adapter_answer.py`: Modal H100 runner for answer-decode validation of the answer-KL+CE late4 adapter.
 - `modal_h100_block_elevator.py`: Modal H100 runner for block-first SVA elevator benchmarking.
 - `modal_h100_block_hybrid.py`: Modal H100 runner for token/block hybrid SVA benchmarking.
 - `modal_h100_learned_hybrid_selector.py`: Modal H100 runner for learned token/block selector benchmarking.
@@ -353,11 +357,13 @@ Answer-token distillation is the strongest tight-budget fidelity result so far. 
 - `results/late4_logit_distill_snapshot_2026-05-14.md`: first SVA-active tight-budget late4 final-logit distillation result.
 - `results/late4_adapter_answer_snapshot_2026-05-14.md`: saved-adapter full answer-decode validation with unadapted tight-budget SVA control.
 - `results/late4_answer_distill_snapshot_2026-05-14.md`: answer-token distillation and full answer-decode validation at tight late4 budget.
+- `results/late4_answer_ce_distill_snapshot_2026-05-14.md`: answer-token KL plus gold-CE distillation and full answer-decode validation at tight late4 budget.
 - `results/hf_artifacts/sva-smollm2-135m-2x256-v1/`: local HF/GitHub-ready `2x256` SVA artifact bundle.
 - `results/hf_artifacts/sva-smollm2-135m-2x256-longctx-refresh-v1/`: local HF/GitHub-ready long-context refreshed `2x256` SVA artifact bundle.
 - `results/hf_artifacts/sva-smollm2-135m-2x256-attnweighted-v1/`: local HF/GitHub-ready attention-weighted long-context `2x256` SVA artifact bundle.
 - `results/hf_artifacts/sva-late4-512x128-adapter-v1/`: saved rank-16 residual adapter for late4 SVA at `512/128`.
 - `results/hf_artifacts/sva-late4-512x128-answerdistill-v1/`: saved rank-16 answer-token-distilled residual adapter for late4 SVA at `512/128`.
+- `results/hf_artifacts/sva-late4-512x128-answerdistill-ce001-v1/`: saved rank-16 answer-KL+CE residual adapter for late4 SVA at `512/128`.
 - `notes/attention_replacement_findings.md`: broader research log leading to SVA.
 - `notes/hierarchical_tree_sva.md`: side-track notes for hierarchical chunk/tree SVA.
 - `notes/million_token_scaling.md`: scaling target for million-token contexts.
@@ -430,6 +436,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_bac
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-late4-adapter-answer -ModalFile modal_h100_late4_adapter_answer.py
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-late4-answer-distill -ModalFile modal_h100_late4_answer_distill.py
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-late4-answerdistill-adapter-answer -ModalFile modal_h100_late4_answerdistill_adapter_answer.py
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-late4-answer-ce-distill -ModalFile modal_h100_late4_answer_ce_distill.py
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-late4-answerce-adapter-answer -ModalFile modal_h100_late4_answerce_adapter_answer.py
 ```
 
 The launcher uses `modal run --detach` and writes local metadata, stdout, stderr, and result files under `results/modal_runs/`.

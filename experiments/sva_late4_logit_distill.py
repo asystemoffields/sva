@@ -89,6 +89,15 @@ def distill_kl(teacher_logits: torch.Tensor, student_logits: torch.Tensor, tempe
     return F.kl_div(student_log_probs, teacher_probs, reduction="batchmean") * (temperature * temperature)
 
 
+def gold_answer_ce(student_logits: torch.Tensor, cached: CachedPrompt) -> torch.Tensor:
+    targets = cached.case.answer_ids.to(student_logits.device)
+    if student_logits.ndim == 3:
+        student_logits = student_logits.view(-1, student_logits.shape[-1])
+    if student_logits.shape[0] == targets.numel():
+        return F.cross_entropy(student_logits.float(), targets)
+    return F.cross_entropy(student_logits.float(), targets[: student_logits.shape[0]])
+
+
 def run_logits_for_target(model: nn.Module, case: PromptCase, target: str) -> torch.Tensor:
     if target == "final":
         output = model(
@@ -198,6 +207,7 @@ def save_adapter_bundle(
         "distill_steps": args.distill_steps,
         "lr": args.lr,
         "temperature": args.temperature,
+        "gold_ce_weight": args.gold_ce_weight,
         "target": args.target,
         "train_contexts": args.contexts,
         "train_keys": args.train_keys,
@@ -302,6 +312,7 @@ def main() -> None:
     parser.add_argument("--lr", type=float, default=0.001)
     parser.add_argument("--weight-decay", type=float, default=0.0)
     parser.add_argument("--temperature", type=float, default=1.0)
+    parser.add_argument("--gold-ce-weight", type=float, default=0.0)
     parser.add_argument("--grad-clip", type=float, default=1.0)
     parser.add_argument("--log-every", type=int, default=4)
     parser.add_argument("--target", choices=["final", "answer"], default="final")
@@ -358,6 +369,7 @@ def main() -> None:
     print(f"adapter_rank,{args.adapter_rank}", flush=True)
     print(f"distill_steps,{args.distill_steps}", flush=True)
     print(f"target,{args.target}", flush=True)
+    print(f"gold_ce_weight,{args.gold_ce_weight}", flush=True)
 
     train_rows = cache_teacher_logits(model, tokenizer, train_keys, train_placements, contexts, device, args.target)
     eval_rows = cache_teacher_logits(model, tokenizer, eval_keys, eval_placements, contexts, device, args.target)
@@ -388,7 +400,9 @@ def main() -> None:
         optimizer.zero_grad(set_to_none=True)
         student_logits = run_student_final_logits(model, patcher, cached)
         teacher_logits = cached.teacher_logits.to(device)
-        loss = distill_kl(teacher_logits, student_logits, args.temperature)
+        kl_loss = distill_kl(teacher_logits, student_logits, args.temperature)
+        ce_loss = gold_answer_ce(student_logits, cached)
+        loss = kl_loss + (args.gold_ce_weight * ce_loss)
         loss.backward()
         if args.grad_clip > 0:
             torch.nn.utils.clip_grad_norm_(trainable, args.grad_clip)
@@ -402,9 +416,11 @@ def main() -> None:
                     "key": cached.key,
                     "placement": cached.placement,
                     "loss": float(loss.item()),
+                    "kl_loss": float(kl_loss.item()),
+                    "gold_ce": float(ce_loss.item()),
                 },
             )
-        del student_logits, teacher_logits, loss
+        del student_logits, teacher_logits, loss, kl_loss, ce_loss
         if device.type == "cuda":
             torch.cuda.empty_cache()
 
