@@ -48,9 +48,9 @@ The synthetic million-token PQ scan benchmark showed plausible but nontrivial th
 
 The working conclusion is now sharper: the broad SVA socket works, and the learned low-rank Q/K score works as a compact ranking signal. Hard lookup cells have been weak, but score-preserving compressed scans can keep most of the learned-ranker signal at plausible primitive speed.
 
-Span statements are now the next evidence-preservation branch. Recent passkey evidence runs show that local neighborhoods can contain the needed evidence after summon while individual-token rerank drops it. The serving shape to test is: sparse summon, open small local spans, compute exact local statements in those spans, then merge the statements.
+The span-statement branch is now measured. At `8192`, radius `32` improved aggregate selected-output cosine from `0.991612` to `0.998145` while reducing scattered segments from about `273` to about `8`. At `16384`, the best efficient rows stayed near `0.992-0.993` cosine. At `32768`, span statements improved over isolated token verification but did not preserve enough evidence: the best efficient rows had key survival around `0.259-0.333`. The serving shape remains useful, but the main bottleneck is again summon catalog quality.
 
-Rotation is a live catalog-quality hypothesis. A Hadamard-style or learned orthogonal rotation before PQ/codebook assignment could spread out low-rank dimensions, reduce coordinate outliers, and make coarse cells more uniform. The direct test is to export a rotated artifact profile, rerun compact summon and evidence-haystack sweeps, and compare recall at the same shortlist and budget.
+The rotation diagnostic found a large codebook-quality opening. At budgets `512/1024/2048`, frozen artifact codebooks reached aggregate teacher top-16 recall `0.771888/0.837511/0.893808`; refit codebooks reached `0.837637/0.884145/0.923472`. PQ score cosine rose from `0.870095` to about `0.9576`, and code entropy rose from `0.812974` to about `0.986`. Hadamard and signed-Hadamard refits were close to plain refit, so the immediate win is better codebook fit and balance. The next test should train identity and signed-Hadamard codebooks on separate calibration streams, then evaluate held-out long-context recall.
 
 ## Million-Token Constraint
 

@@ -130,7 +130,9 @@ The evidence-haystack benchmark now measures summon quality directly. Multi-anch
 
 The evidence-aware rerank sweep found a method-level improvement and a sharper next target. At `16384`, current-query rerank plus radius `32` lifted aggregate verified key survival from `0.461420` to `0.614198` while keeping average exact score work below full attention. At `32768`, expansion lifted aggregate candidate key coverage to `0.601852`, but verified key survival reached only `0.307098`; individual-token rerank is now the main loss point. The next test is span/block statements that preserve local evidence neighborhoods after summon.
 
-The current span-statement test is staged. It opens local spans around summoned tokens, compares selected-span output against full attention, and tracks evidence survival, value reads, exact score work, and contiguous segment count. A rotation follow-up is also queued: Hadamard-style or learned orthogonal preconditioning before catalog/codebook assignment may make the low-rank summon space less axis-fragile.
+The span-statement test confirms that local statements are a useful verifier shape, while also sharpening the summon problem. At `8192`, radius `32` improved aggregate output cosine from `0.991612` to `0.998145` and reduced scattered segments from about `273` to about `8`. At `16384`, statement-style verification still reached about `0.992-0.993` cosine in the best efficient rows. At `32768`, quality dropped into the `0.951-0.972` range and key survival stayed low, so the main pressure returns to catalog quality.
+
+The rotation diagnostic found a large codebook-quality opening. Against the frozen artifact codebooks, aggregate teacher top-16 recall was `0.771888` at budget `512`, `0.837511` at `1024`, and `0.893808` at `2048`. Refit codebooks lifted those to `0.837637`, `0.884145`, and `0.923472`, while raising PQ score cosine from `0.870095` to about `0.9576`. Hadamard and signed-Hadamard refits were essentially tied with plain refit, so the next deployable test is held-out calibration-time codebook refresh rather than relying on eval-key refit.
 
 ## Files
 
@@ -164,6 +166,7 @@ The current span-statement test is staged. It opens local spans around summoned 
 - `experiments/sva_learned_hybrid_selector_benchmark.py`: learned selector benchmark for token/block SVA routing from cheap pre-verifier features.
 - `experiments/sva_evidence_haystack_benchmark.py`: passkey evidence survival benchmark that measures whether the summoner keeps the needed tokens as context grows, with optional anchor-aware rerank and neighborhood expansion.
 - `experiments/sva_span_statement_benchmark.py`: passkey span-statement benchmark that opens local spans around summoned evidence and compares selected-span output with full attention.
+- `experiments/sva_rotation_diagnostic.py`: low-rank rotation diagnostic that compares frozen product codebooks with refit identity and Hadamard-style codebooks.
 - `experiments/sva_artifact_io.py`: save/load helpers for portable frozen SVA artifact bundles.
 - `experiments/export_sva_artifact.py`: exporter for HF/GitHub-ready SVA artifact folders.
 - `experiments/sva_address_scaling.py`: address selectivity calculator for long contexts.
@@ -201,6 +204,7 @@ The current span-statement test is staged. It opens local spans around summoned 
 - `modal_h100_evidence_haystack.py`: Modal H100 runner for passkey evidence survival benchmarking.
 - `modal_h100_evidence_rerank.py`: Modal H100 runner for evidence-aware rerank and neighborhood-expansion benchmarking.
 - `modal_h100_span_statement.py`: Modal H100 runner for passkey span-statement benchmarking.
+- `modal_h100_rotation_diagnostic.py`: Modal H100 runner for low-rank rotation diagnostics.
 - `modal_h100_million_stream.py`: Modal H100 runner for the million-token address-pressure simulation.
 - `modal_h100_learned_ranker.py`: Modal H100 runner for the learned compressed-ranker test.
 - `modal_h100_learned_ranker_generalize.py`: Modal H100 runner for the held-out-text ranker test.
@@ -272,6 +276,8 @@ The current span-statement test is staged. It opens local spans around summoned 
 - `results/learned_hybrid_selector_snapshot_2026-05-14.md`: learned token/block selector benchmark snapshot.
 - `results/evidence_haystack_snapshot_2026-05-14.md`: passkey evidence survival benchmark snapshot.
 - `results/evidence_rerank_snapshot_2026-05-14.md`: evidence-aware rerank and neighborhood-expansion snapshot.
+- `results/span_statement_snapshot_2026-05-14.md`: span-statement verifier benchmark snapshot.
+- `results/rotation_diagnostic_snapshot_2026-05-14.md`: low-rank rotation and codebook-fit diagnostic snapshot.
 - `results/hf_artifacts/sva-smollm2-135m-2x256-v1/`: local HF/GitHub-ready `2x256` SVA artifact bundle.
 - `notes/attention_replacement_findings.md`: broader research log leading to SVA.
 - `notes/hierarchical_tree_sva.md`: side-track notes for hierarchical chunk/tree SVA.
@@ -325,6 +331,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_bac
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-evidence-haystack -ModalFile modal_h100_evidence_haystack.py
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-evidence-rerank -ModalFile modal_h100_evidence_rerank.py
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-span-statement -ModalFile modal_h100_span_statement.py
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-rotation-diagnostic -ModalFile modal_h100_rotation_diagnostic.py
 ```
 
 The launcher uses `modal run --detach` and writes local metadata, stdout, stderr, and result files under `results/modal_runs/`.
