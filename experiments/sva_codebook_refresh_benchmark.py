@@ -38,6 +38,7 @@ from sva_rotation_diagnostic import (
     score_alignment,
     topk_targets,
 )
+from sva_supervised_coarse_pq_test import fit_weighted_product_codebooks
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
@@ -91,7 +92,13 @@ def calibration_stream_to_length(tokenizer, docs, min_tokens: int, initial_repea
 
 
 def variant_rotation_label(variant: str) -> str:
-    if variant in {"artifact_identity", "calib_identity", "eval_refit_identity"}:
+    if variant in {
+        "artifact_identity",
+        "calib_identity",
+        "calib_attention_weighted",
+        "calib_attention_weighted_strong",
+        "eval_refit_identity",
+    }:
         return "identity"
     if variant == "calib_hadamard":
         return "hadamard"
@@ -101,7 +108,43 @@ def variant_rotation_label(variant: str) -> str:
 
 
 def is_calibration_variant(variant: str) -> bool:
-    return variant in {"calib_identity", "calib_hadamard", "calib_signed_hadamard"}
+    return variant in {
+        "calib_identity",
+        "calib_hadamard",
+        "calib_signed_hadamard",
+        "calib_attention_weighted",
+        "calib_attention_weighted_strong",
+    }
+
+
+def is_attention_weighted_variant(variant: str) -> bool:
+    return variant in {"calib_attention_weighted", "calib_attention_weighted_strong"}
+
+
+def attention_boost_for_variant(variant: str, base_boost: float) -> float:
+    if variant == "calib_attention_weighted_strong":
+        return base_boost * 4.0
+    return base_boost
+
+
+@torch.no_grad()
+def topk_key_weights(
+    top_idx: torch.Tensor,
+    top_valid: torch.Tensor,
+    seq_len: int,
+    boost: float,
+) -> torch.Tensor:
+    weights = torch.ones(top_idx.shape[0], seq_len, device=top_idx.device, dtype=torch.float32)
+    for head_idx in range(top_idx.shape[0]):
+        valid_idx = top_idx[head_idx][top_valid[head_idx]]
+        if valid_idx.numel() == 0:
+            continue
+        weights[head_idx].index_add_(
+            0,
+            valid_idx.long().clamp(0, seq_len - 1),
+            torch.full((valid_idx.numel(),), float(boost), device=top_idx.device, dtype=torch.float32),
+        )
+    return weights
 
 
 @torch.no_grad()
@@ -112,6 +155,10 @@ def fit_calibration_codebooks(
     calibration_batch: dict[str, torch.Tensor],
     layers: list[int],
     variants: list[str],
+    topk: int,
+    calibration_query_samples: int,
+    min_query_pos: int,
+    attention_boost: float,
     kmeans_iters: int,
     assign_chunk_size: int,
     seed: int,
@@ -129,22 +176,48 @@ def fit_calibration_codebooks(
     rotations_by_variant: dict[tuple[str, int], torch.Tensor | None] = {}
 
     for layer_idx in layers:
-        query_all, key_all, _, _ = layer_qkv_from_hidden(model, output.hidden_states, layer_idx, position_ids)
+        query_all, key_all, _, scaling = layer_qkv_from_hidden(model, output.hidden_states, layer_idx, position_ids)
         _, k_low, _, _ = project_catalog(query_all, key_all, bundle, layer_idx, assign_chunk_size)
+        weighted_targets: tuple[torch.Tensor, torch.Tensor] | None = None
         for variant in variants:
             if not is_calibration_variant(variant):
                 continue
             rotation_label = variant_rotation_label(variant)
             rotation = rotation_matrix(rotation_label, bundle.rank_dim, seed + layer_idx * 1009, device)
             rotated_k = apply_rotation(k_low, rotation)
-            codebooks = fit_product_codebooks(
-                rotated_k,
-                bundle.coarse_subspaces,
-                bundle.coarse_codewords,
-                kmeans_iters,
-                seed + layer_idx * 9973 + len(variant) * 37,
-                assign_chunk_size,
-            )
+            if is_attention_weighted_variant(variant):
+                if weighted_targets is None:
+                    query_positions = query_positions_for(seq_len, calibration_query_samples, min_query_pos, device)
+                    full_scores = (
+                        torch.einsum("hqd,hkd->hqk", query_all[:, query_positions].float(), key_all.float())
+                        * scaling
+                    )
+                    weighted_targets = topk_targets(full_scores, query_positions, topk)
+                top_idx, top_valid = weighted_targets
+                weights = topk_key_weights(
+                    top_idx,
+                    top_valid,
+                    seq_len,
+                    attention_boost_for_variant(variant, attention_boost),
+                )
+                codebooks = fit_weighted_product_codebooks(
+                    rotated_k,
+                    weights,
+                    bundle.coarse_subspaces,
+                    bundle.coarse_codewords,
+                    kmeans_iters,
+                    seed + layer_idx * 9973 + len(variant) * 37,
+                    assign_chunk_size,
+                )
+            else:
+                codebooks = fit_product_codebooks(
+                    rotated_k,
+                    bundle.coarse_subspaces,
+                    bundle.coarse_codewords,
+                    kmeans_iters,
+                    seed + layer_idx * 9973 + len(variant) * 37,
+                    assign_chunk_size,
+                )
             codebooks_by_variant[(variant, layer_idx)] = codebooks.detach()
             rotations_by_variant[(variant, layer_idx)] = rotation.detach() if rotation is not None else None
             codes = encode_product_keys(rotated_k, codebooks, assign_chunk_size)
@@ -154,6 +227,9 @@ def fit_calibration_codebooks(
                     "variant": variant,
                     "layer": layer_idx,
                     "calibration_seq_len": seq_len,
+                    "attention_boost": attention_boost_for_variant(variant, attention_boost)
+                    if is_attention_weighted_variant(variant)
+                    else 0.0,
                     "code_entropy": normalized_code_entropy(codes, bundle.coarse_codewords),
                     "code_max_fraction": mean_code_max_fraction(codes, bundle.coarse_codewords),
                 },
@@ -218,6 +294,8 @@ def main() -> None:
     parser.add_argument("--budgets", default="512,1024,2048")
     parser.add_argument("--topk", type=int, default=16)
     parser.add_argument("--query-samples", type=int, default=64)
+    parser.add_argument("--calibration-query-samples", type=int, default=128)
+    parser.add_argument("--attention-boost", type=float, default=4.0)
     parser.add_argument("--min-query-pos", type=int, default=128)
     parser.add_argument("--kmeans-iters", type=int, default=8)
     parser.add_argument("--assign-chunk-size", type=int, default=8192)
@@ -291,6 +369,10 @@ def main() -> None:
         calibration_batch=calibration_batch,
         layers=layers,
         variants=variants,
+        topk=args.topk,
+        calibration_query_samples=args.calibration_query_samples,
+        min_query_pos=args.min_query_pos,
+        attention_boost=args.attention_boost,
         kmeans_iters=args.kmeans_iters,
         assign_chunk_size=args.assign_chunk_size,
         seed=args.seed,

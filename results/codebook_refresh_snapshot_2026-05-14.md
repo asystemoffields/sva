@@ -65,7 +65,7 @@ At `16384`, calibration refresh also improves the tight-budget rows. At `8192`, 
 
 ## Interpretation
 
-This is a real held-out improvement for long-context SVA. The strongest signal is Shannon-style: when the product-code catalog loses entropy, many keys collide into a few overloaded codes and the summoner stops preserving enough evidence. At `32768`, the frozen artifact's largest average code bucket carries about `23%` of traffic in a subspace. Calibration refresh reduces that to about `1.4%` and raises teacher recall by `0.057545-0.072718` across budgets.
+This is a real held-out improvement for long-context SVA. The strongest diagnostic in this run is Shannon-style: when the product-code catalog loses entropy, many keys collide into a few overloaded codes and the summoner stops preserving enough evidence. At `32768`, the frozen artifact's largest average code bucket carries about `23%` of traffic in a subspace. Calibration refresh reduces that to about `1.4%` and raises teacher recall by `0.057545-0.072718` across budgets.
 
 Entropy alone is a state variable, not the full objective. The useful formula seems to need at least:
 

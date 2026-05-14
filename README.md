@@ -134,11 +134,11 @@ The span-statement test confirms that local statements are a useful verifier sha
 
 The rotation diagnostic found a large codebook-quality opening. Against the frozen artifact codebooks, aggregate teacher top-16 recall was `0.771888` at budget `512`, `0.837511` at `1024`, and `0.893808` at `2048`. Refit codebooks lifted those to `0.837637`, `0.884145`, and `0.923472`, while raising PQ score cosine from `0.870095` to about `0.9576`. Hadamard and signed-Hadamard refits were essentially tied with plain refit, so the next deployable test is held-out calibration-time codebook refresh rather than relying on eval-key refit.
 
-Held-out codebook refresh confirmed that the codebook-quality opening generalizes. At `32768`, the frozen artifact reached teacher top-16 recall `0.563169/0.657407/0.752450` at budgets `512/1024/2048`. Calibration-fit codebooks lifted those to `0.635887/0.726002/0.809995`, close to the eval-refit upper bound `0.645553/0.734592/0.816090`. The catalog-quality signal is Shannon-shaped: normalized code entropy rose from `0.718895` to about `0.978`, while the largest average code bucket fell from `0.230200` to about `0.0144`. At `8192`, the frozen artifact remains best, so the next deployable shape is context-matched profiles plus a simple context-length router.
+Held-out codebook refresh confirmed that the codebook-quality opening generalizes. At `32768`, the frozen artifact reached teacher top-16 recall `0.563169/0.657407/0.752450` at budgets `512/1024/2048`. Calibration-fit codebooks lifted those to `0.635887/0.726002/0.809995`, close to the eval-refit upper bound `0.645553/0.734592/0.816090`. Code entropy moved with that win: normalized entropy rose from `0.718895` to about `0.978`, while the largest average code bucket fell from `0.230200` to about `0.0144`. At `8192`, the frozen artifact remains best, so the next deployable shape is context-matched profiles plus a simple context-length router.
 
 The first long-context refreshed artifact is now exported at `results/hf_artifacts/sva-smollm2-135m-2x256-longctx-refresh-v1`. It reloads through the production artifact loader and reproduces the long-context refresh result: at `32768`, it reaches teacher top-16 recall `0.630588/0.725071/0.809860` at budgets `512/1024/2048`, with score cosine `0.945643` and normalized code entropy `0.978694`. At `8192`, it trails the original artifact, so the next production test is profile routing: original artifact for 8k, refreshed artifact for 16k/32k.
 
-The first language-facing profile-router test is a useful negative. With the original profile at `8192`, the refreshed profile at `16384/32768`, and the larger `8192/2048` scan policy, passkey answer NLL deltas were `0.070947`, `0.042013`, and `0.138533`. The earlier original-profile scale-out row was slightly better at `16384/32768` (`-0.016004` and `0.116894`), so aggregate recall and entropy gains have not yet converted into passkey language gains. The next profile should be evidence-aware: preserve entropy while weighting codebook fit toward attention top-k and exact evidence neighborhoods.
+The first language-facing profile-router test is a useful negative. With the original profile at `8192`, the refreshed profile at `16384/32768`, and the larger `8192/2048` scan policy, passkey answer NLL deltas were `0.070947`, `0.042013`, and `0.138533`. The earlier original-profile scale-out row was slightly better at `16384/32768` (`-0.016004` and `0.116894`), so aggregate recall and entropy gains have not yet converted into passkey language gains. The next profile should be evidence-aware: weight codebook fit toward attention top-k and exact evidence neighborhoods, while recording entropy only as a collapse diagnostic.
 
 ## Files
 
@@ -216,6 +216,7 @@ The first language-facing profile-router test is a useful negative. With the ori
 - `modal_h100_span_statement.py`: Modal H100 runner for passkey span-statement benchmarking.
 - `modal_h100_rotation_diagnostic.py`: Modal H100 runner for low-rank rotation diagnostics.
 - `modal_h100_codebook_refresh.py`: Modal H100 runner for held-out calibration-time codebook refresh.
+- `modal_h100_attention_weighted_refresh.py`: Modal H100 runner for attention-weighted held-out codebook refresh.
 - `modal_h100_refreshed_profile_recall.py`: Modal H100 runner for exported refreshed-profile recall sanity checks.
 - `modal_h100_million_stream.py`: Modal H100 runner for the million-token address-pressure simulation.
 - `modal_h100_learned_ranker.py`: Modal H100 runner for the learned compressed-ranker test.
@@ -351,6 +352,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_bac
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-span-statement -ModalFile modal_h100_span_statement.py
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-rotation-diagnostic -ModalFile modal_h100_rotation_diagnostic.py
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-codebook-refresh -ModalFile modal_h100_codebook_refresh.py
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-attention-weighted-refresh -ModalFile modal_h100_attention_weighted_refresh.py
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-refreshed-profile-recall -ModalFile modal_h100_refreshed_profile_recall.py
 ```
 

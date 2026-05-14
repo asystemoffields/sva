@@ -44,7 +44,7 @@ For comparison, the earlier original-profile scale-out run with the same `8192/2
 
 This is a useful negative. The refreshed profile improves aggregate teacher top-16 recall, score cosine, and code entropy, but that does not directly improve this exact-string language benchmark at the large `8192/2048` sparse budget.
 
-The likely lesson is that Shannon-style catalog balance is necessary for long-context recall, but passkey preservation needs a more targeted objective. A globally better codebook can still move answer-sensitive keys, layers, or value mass in ways the aggregate recall proxy does not see.
+The likely lesson is that catalog balance can help long-context recall, but passkey preservation needs a more targeted objective. A globally better codebook can still move answer-sensitive keys, layers, or value mass in ways the aggregate recall proxy does not see.
 
 The prefill path is also still far from production-shaped. At `32768`, routed SVA prefill took about `93.6s` in this PyTorch scan harness while full attention took about `0.18s`; decode was closer, with about `2.94x` slowdown and `16x` fewer value reads.
 
@@ -54,5 +54,5 @@ The next sharp test should be an evidence-aware refresh rather than another plai
 
 - compare original and refreshed profiles on passkey key survival by layer/head/query,
 - weight calibration codebooks toward attention top-k and passkey/evidence neighborhoods,
-- keep code entropy and max-code-load as constraints,
+- record code entropy and max-code-load as diagnostics,
 - rerun the profile-router passkey test only after the evidence-weighted profile improves key survival.

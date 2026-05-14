@@ -52,7 +52,7 @@ The span-statement branch is now measured. At `8192`, radius `32` improved aggre
 
 The rotation diagnostic found a large codebook-quality opening. At budgets `512/1024/2048`, frozen artifact codebooks reached aggregate teacher top-16 recall `0.771888/0.837511/0.893808`; refit codebooks reached `0.837637/0.884145/0.923472`. PQ score cosine rose from `0.870095` to about `0.9576`, and code entropy rose from `0.812974` to about `0.986`. Hadamard and signed-Hadamard refits were close to plain refit, so the immediate win is better codebook fit and balance. The next test should train identity and signed-Hadamard codebooks on separate calibration streams, then evaluate held-out long-context recall.
 
-Held-out codebook refresh confirmed the codebook-quality opening. At `32768`, the frozen artifact reached teacher top-16 recall `0.563169/0.657407/0.752450` at budgets `512/1024/2048`; calibration-fit codebooks lifted those to `0.635887/0.726002/0.809995`, close to the eval-key refit upper bound `0.645553/0.734592/0.816090`. The Shannon-style diagnostic is clear: normalized code entropy rose from `0.718895` to about `0.978`, and the largest average code bucket fell from `0.230200` to about `0.0144`. At `8192`, the frozen artifact remains best, which points to context-matched catalog profiles rather than one global codebook.
+Held-out codebook refresh confirmed the codebook-quality opening. At `32768`, the frozen artifact reached teacher top-16 recall `0.563169/0.657407/0.752450` at budgets `512/1024/2048`; calibration-fit codebooks lifted those to `0.635887/0.726002/0.809995`, close to the eval-key refit upper bound `0.645553/0.734592/0.816090`. Code entropy moved with that recall win: normalized code entropy rose from `0.718895` to about `0.978`, and the largest average code bucket fell from `0.230200` to about `0.0144`. At `8192`, the frozen artifact remains best, which points to context-matched catalog profiles rather than one global codebook.
 
 The first refreshed long-context artifact now exists locally at `results/hf_artifacts/sva-smollm2-135m-2x256-longctx-refresh-v1`. It preserves the long-context gain as a deployable profile: at `32768`, it reaches teacher top-16 recall `0.630588/0.725071/0.809860` at budgets `512/1024/2048`, with score cosine `0.945643`, normalized code entropy `0.978694`, and max code fraction `0.014597`. At `8192`, it reaches `0.952637/0.988589/0.998788`, below the original artifact's `0.972367/0.993978/0.999295`, so the next production path is profile routing.
 
@@ -115,15 +115,15 @@ The likely million-token shape is a three-stage SVA stack:
 
 The 512-token prefilter sweep showed that random low-dimensional ranking is too blunt when pushed hard. It can cut exact scoring, but it loses top-key recall before the quality loss is acceptable at longer context.
 
-So the next invention target is the cheap ranker and its catalog. The summon stage has to preserve the top full-attention keys while shrinking exact scoring by another factor, and the catalog needs enough effective entropy that increasing context length does not collapse many useful keys into the same overloaded codes.
+So the next invention target is the cheap ranker and its catalog. The summon stage has to preserve the top full-attention keys while shrinking exact scoring by another factor. Code entropy and max bucket load are useful warning lights when a catalog collapses, but the target remains evidence survival and language preservation.
 
-The current working formula is:
+The current measurement panel is:
 
 ```text
-teacher_recall = f(context_length, verifier_budget, score_cosine, score_mse, normalized_code_entropy, max_code_fraction)
+context_length, verifier_budget, teacher_recall, evidence_survival, answer_NLL, score_cosine, score_mse, normalized_code_entropy, max_code_fraction
 ```
 
-The important refinement is distribution matching. High code entropy is useful when it is measured on the distribution being served; a 32k-calibrated catalog can improve 16k/32k recall while giving back some of the 8k artifact's advantage.
+The important refinement is distribution matching. High code entropy can coincide with better long-context recall, but the passkey profile-router result says it is not enough by itself.
 
 ## Next Verification Step
 
@@ -131,6 +131,6 @@ The next architectural test is evidence-aware context-matched serving:
 
 - keep the exact verifier unchanged
 - compare original and refreshed profiles on passkey key survival by layer/head/query
-- fit the next long-context profile with attention/evidence-weighted codebooks under entropy and max-load constraints
-- track recall, score distortion, normalized code entropy, max code load, value reads, and wall time
+- fit the next long-context profile with attention/evidence-weighted codebooks
+- track recall, evidence survival, answer NLL, score distortion, normalized code entropy, max code load, value reads, and wall time
 - rerun the profile-router passkey benchmark only after key survival improves
