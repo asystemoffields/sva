@@ -86,7 +86,11 @@ The combined test stacked those gains. Training the supervised rank-64 coarse sc
 
 The tight-shortlist pressure test set the current practical band. Weighted supervised `4x64` reached `0.776445` at shortlist `1024`, `0.757239` at `768`, and `0.713759` at `512`. The method still improves over unweighted and unsupervised coarse PQ at each point, but the drop below `1024` is steep. The next target is a shortlist-aware coarse objective that trains for top-key survival at `512-1024` directly.
 
-Hard-negative coarse training directly attacked that shortlist-survival objective. After `80` hard-negative steps mined from a `1024` candidate pool, weighted hard-supervised `4x64` reached `0.826187` at shortlist `512`, `0.829861` at `768`, and `0.832217` at `1024`, close to the exact learned-ranker ceiling of `0.839332`. This is the strongest current mainline result.
+Hard-negative coarse training directly attacked that shortlist-survival objective. After `80` hard-negative steps, weighted hard-supervised `4x64` reached the strongest current mainline result. A mining-pool sweep found that pool `512` with boost `4` was best across aggregate shortlists: `0.827179` at shortlist `512`, `0.831303` at `768`, `0.834108` at `1024`, and `0.820685` at `2048`, versus exact learned-ranker recall of `0.839332` and full fine-PQ recall of `0.802021`.
+
+The handoff diagnostic isolated the `2048` shortlist dip. On the same hard-negative candidate sets, coarse-only survival rose from `0.906095` at shortlist `1024` to `0.959279` at `2048`, and exact rank-64 rescoring stayed high at `0.847873` and `0.847811`. Fine-PQ rescoring fell from `0.834077` to `0.820669`. The next target is a cheap exact rank-64 middle stage: coarse PQ summon, exact low-rank rescore over roughly `1024-2048` candidates, then full attention verification over the final `512`.
+
+The first synthetic million-token benchmark supports that target. With `4x64` coarse PQ over one million keys, exact rank-64 rescoring took about `1.00 ms` for one query and `2.16 ms` for four queries at shortlist `2048`, using about `1.15 GB` of bf16 rank-key memory for `9` heads. The exact rescore block itself was about `0.12 ms`; the measured cost is mostly coarse scan plus shortlist top-k. The next quality test is to socket this three-stage path into the SmolLM2 attention replacement harness.
 
 ## Files
 
@@ -105,6 +109,7 @@ Hard-negative coarse training directly attacked that shortlist-survival objectiv
 - `experiments/sva_pq_scan_benchmark.py`: synthetic million-token PQ scan throughput benchmark.
 - `experiments/sva_coarse_to_fine_pq_test.py`: coarse-to-fine product-quantized lookup test.
 - `experiments/sva_coarse_to_fine_pq_scan_benchmark.py`: synthetic million-token coarse-to-fine PQ scan throughput benchmark.
+- `experiments/sva_coarse_exact_rescore_benchmark.py`: synthetic million-token coarse PQ plus exact low-rank rescore benchmark.
 - `experiments/sva_supervised_coarse_pq_test.py`: supervised coarse-stage PQ lookup test.
 - `experiments/sva_address_scaling.py`: address selectivity calculator for long contexts.
 - `modal_h100_trainable.py`: Modal H100 runner for the trainable benchmark.
@@ -121,6 +126,7 @@ Hard-negative coarse training directly attacked that shortlist-survival objectiv
 - `modal_h100_pq_scan_benchmark.py`: Modal H100 runner for PQ scan throughput.
 - `modal_h100_coarse_to_fine_pq.py`: Modal H100 runner for coarse-to-fine PQ lookup.
 - `modal_h100_coarse_to_fine_pq_scan_benchmark.py`: Modal H100 runner for coarse-to-fine PQ scan throughput.
+- `modal_h100_coarse_exact_rescore_benchmark.py`: Modal H100 runner for coarse PQ plus exact low-rank rescore throughput.
 - `modal_h100_supervised_coarse_pq.py`: Modal H100 runner for supervised coarse-stage PQ lookup.
 - `modal_h100_supervised_coarse_pq_attention16.py`: Modal H100 runner for supervised coarse PQ with attention top-16 labels.
 - `modal_h100_weighted_coarse_pq.py`: Modal H100 runner for attention-weighted coarse PQ in the fine-ranker space.
@@ -128,6 +134,7 @@ Hard-negative coarse training directly attacked that shortlist-survival objectiv
 - `modal_h100_weighted_supervised_coarse_pq_tight.py`: Modal H100 runner for tight-shortlist weighted supervised coarse PQ.
 - `modal_h100_hard_supervised_coarse_pq.py`: Modal H100 runner for hard-negative supervised coarse PQ.
 - `modal_h100_hard_pool_sweep.py`: Modal H100 runner for hard-negative pool-size sweep.
+- `modal_h100_hard_handoff.py`: Modal H100 runner for hard-negative handoff diagnostics.
 - `scripts/start_modal_h100_background.ps1`: detached Modal launcher that writes run logs under `results/modal_runs/`.
 - `results/verification_snapshot_2026-05-13.md`: current kill-test results.
 - `results/trainable_recall_snapshot_2026-05-13.md`: H100 trainable-representation checkpoint.
@@ -147,12 +154,15 @@ Hard-negative coarse training directly attacked that shortlist-survival objectiv
 - `results/pq_scan_benchmark_snapshot_2026-05-13.md`: synthetic million-token PQ scan throughput snapshot.
 - `results/coarse_to_fine_pq_snapshot_2026-05-13.md`: coarse-to-fine PQ lookup snapshot.
 - `results/coarse_to_fine_pq_scan_benchmark_snapshot_2026-05-13.md`: synthetic million-token coarse-to-fine PQ scan throughput snapshot.
+- `results/coarse_exact_rescore_benchmark_snapshot_2026-05-13.md`: synthetic million-token coarse PQ plus exact low-rank rescore throughput snapshot.
 - `results/supervised_coarse_pq_snapshot_2026-05-13.md`: supervised coarse-stage PQ lookup snapshot.
 - `results/supervised_coarse_pq_attention16_snapshot_2026-05-13.md`: supervised coarse PQ with attention top-16 labels snapshot.
 - `results/weighted_coarse_pq_snapshot_2026-05-13.md`: attention-weighted coarse PQ codebook snapshot.
 - `results/weighted_supervised_coarse_pq_snapshot_2026-05-13.md`: weighted codebooks in supervised coarse space snapshot.
 - `results/weighted_supervised_coarse_pq_tight_snapshot_2026-05-13.md`: tight-shortlist weighted supervised coarse PQ snapshot.
 - `results/hard_supervised_coarse_pq_snapshot_2026-05-13.md`: hard-negative supervised coarse PQ snapshot.
+- `results/hard_pool_sweep_snapshot_2026-05-13.md`: hard-negative mining-pool sweep snapshot.
+- `results/hard_handoff_snapshot_2026-05-13.md`: hard-negative handoff diagnostic snapshot.
 - `notes/attention_replacement_findings.md`: broader research log leading to SVA.
 - `notes/hierarchical_tree_sva.md`: side-track notes for hierarchical chunk/tree SVA.
 - `notes/million_token_scaling.md`: scaling target for million-token contexts.
@@ -174,6 +184,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_bac
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-pq-scan-benchmark -ModalFile modal_h100_pq_scan_benchmark.py
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-coarse-to-fine-pq -ModalFile modal_h100_coarse_to_fine_pq.py
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-coarse-to-fine-pq-scan-benchmark -ModalFile modal_h100_coarse_to_fine_pq_scan_benchmark.py
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-coarse-exact-rescore-benchmark -ModalFile modal_h100_coarse_exact_rescore_benchmark.py
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-supervised-coarse-pq -ModalFile modal_h100_supervised_coarse_pq.py
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-supervised-coarse-pq-attention16 -ModalFile modal_h100_supervised_coarse_pq_attention16.py
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-weighted-coarse-pq -ModalFile modal_h100_weighted_coarse_pq.py
@@ -181,6 +192,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_bac
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-weighted-supervised-coarse-pq-tight -ModalFile modal_h100_weighted_supervised_coarse_pq_tight.py
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-hard-supervised-coarse-pq -ModalFile modal_h100_hard_supervised_coarse_pq.py
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-hard-pool-sweep -ModalFile modal_h100_hard_pool_sweep.py
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-hard-handoff -ModalFile modal_h100_hard_handoff.py
 ```
 
 The launcher uses `modal run --detach` and writes local metadata, stdout, stderr, and result files under `results/modal_runs/`.

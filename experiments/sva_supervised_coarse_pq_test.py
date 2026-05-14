@@ -465,6 +465,7 @@ def main() -> None:
     parser.add_argument("--coarse-hard-negatives", type=int, default=64)
     parser.add_argument("--coarse-hard-margin", type=float, default=1.0)
     parser.add_argument("--coarse-hard-lr-scale", type=float, default=0.5)
+    parser.add_argument("--handoff-diagnostics", action="store_true")
     parser.add_argument("--batch-queries", type=int, default=16)
     parser.add_argument("--lr", type=float, default=3e-3)
     parser.add_argument("--weight-decay", type=float, default=1e-4)
@@ -566,6 +567,7 @@ def main() -> None:
     print(f"coarse_hard_negatives,{args.coarse_hard_negatives}")
     print(f"coarse_hard_margin,{args.coarse_hard_margin:g}")
     print(f"coarse_hard_lr_scale,{args.coarse_hard_lr_scale:g}")
+    print(f"handoff_diagnostics,{int(args.handoff_diagnostics)}")
     print(
         "supervised_coarse_pq_header,"
         "label,layer,seq_len,fine_rank_dim,coarse_rank_dim,coarse_label_topk,"
@@ -1104,6 +1106,7 @@ def main() -> None:
                         f"{layer_idx},{coarse_rank_dim},{args.coarse_hard_pool},{coarse_subspaces},{actual_coarse_codewords}",
                         flush=True,
                     )
+                    handoff_emitted: set[tuple[str, int, int]] = set()
                     for (fine_subspaces, fine_codewords), fine_scores in fine_score_cache.items():
                         for shortlist in shortlists:
                             for budget in budgets:
@@ -1134,6 +1137,57 @@ def main() -> None:
                                     eval_top_valid,
                                     aggregate,
                                 )
+                                if args.handoff_diagnostics and (hard_label_name, shortlist, budget) not in handoff_emitted:
+                                    handoff_emitted.add((hard_label_name, shortlist, budget))
+                                    evaluate_scores(
+                                        f"{hard_label_name}_coarse_only",
+                                        layer_idx,
+                                        eval_seq_len,
+                                        args.fine_rank_dim,
+                                        coarse_rank_dim,
+                                        args.coarse_label_topk,
+                                        coarse_subspaces,
+                                        actual_coarse_codewords,
+                                        0,
+                                        0,
+                                        shortlist,
+                                        shortlist,
+                                        args.kmeans_iters,
+                                        args.fine_train_steps,
+                                        args.coarse_train_steps + args.coarse_hard_steps,
+                                        fine_loss,
+                                        hard_loss,
+                                        coarse_scores,
+                                        eval_positions,
+                                        eval_top_idx,
+                                        eval_top_valid,
+                                        aggregate,
+                                    )
+                                    evaluate_stage(
+                                        f"{hard_label_name}_exact_rescore",
+                                        layer_idx,
+                                        eval_seq_len,
+                                        args.fine_rank_dim,
+                                        coarse_rank_dim,
+                                        args.coarse_label_topk,
+                                        coarse_subspaces,
+                                        actual_coarse_codewords,
+                                        0,
+                                        0,
+                                        shortlist,
+                                        budget,
+                                        args.kmeans_iters,
+                                        args.fine_train_steps,
+                                        args.coarse_train_steps + args.coarse_hard_steps,
+                                        fine_loss,
+                                        hard_loss,
+                                        coarse_scores,
+                                        exact_scores,
+                                        eval_positions,
+                                        eval_top_idx,
+                                        eval_top_valid,
+                                        aggregate,
+                                    )
                     del coarse_codebooks, coarse_codes, coarse_scores
                     if device.type == "cuda":
                         torch.cuda.empty_cache()
@@ -1178,13 +1232,15 @@ def main() -> None:
                                 f"{layer_idx},{coarse_rank_dim},{args.coarse_hard_pool},{boost:g},{coarse_subspaces},{actual_coarse_codewords}",
                                 flush=True,
                             )
+                            handoff_emitted: set[tuple[str, int, int]] = set()
                             for (fine_subspaces, fine_codewords), fine_scores in fine_score_cache.items():
                                 for shortlist in shortlists:
                                     for budget in budgets:
                                         if shortlist < budget:
                                             continue
+                                        weighted_hard_label = f"weighted_{hard_label_name}_b{boost_label(boost)}"
                                         evaluate_stage(
-                                            f"weighted_{hard_label_name}_b{boost_label(boost)}",
+                                            weighted_hard_label,
                                             layer_idx,
                                             eval_seq_len,
                                             args.fine_rank_dim,
@@ -1208,6 +1264,60 @@ def main() -> None:
                                             eval_top_valid,
                                             aggregate,
                                         )
+                                        if (
+                                            args.handoff_diagnostics
+                                            and (weighted_hard_label, shortlist, budget) not in handoff_emitted
+                                        ):
+                                            handoff_emitted.add((weighted_hard_label, shortlist, budget))
+                                            evaluate_scores(
+                                                f"{weighted_hard_label}_coarse_only",
+                                                layer_idx,
+                                                eval_seq_len,
+                                                args.fine_rank_dim,
+                                                coarse_rank_dim,
+                                                args.coarse_label_topk,
+                                                coarse_subspaces,
+                                                actual_coarse_codewords,
+                                                0,
+                                                0,
+                                                shortlist,
+                                                shortlist,
+                                                args.kmeans_iters,
+                                                args.fine_train_steps,
+                                                args.coarse_train_steps + args.coarse_hard_steps,
+                                                fine_loss,
+                                                hard_loss,
+                                                weighted_scores,
+                                                eval_positions,
+                                                eval_top_idx,
+                                                eval_top_valid,
+                                                aggregate,
+                                            )
+                                            evaluate_stage(
+                                                f"{weighted_hard_label}_exact_rescore",
+                                                layer_idx,
+                                                eval_seq_len,
+                                                args.fine_rank_dim,
+                                                coarse_rank_dim,
+                                                args.coarse_label_topk,
+                                                coarse_subspaces,
+                                                actual_coarse_codewords,
+                                                0,
+                                                0,
+                                                shortlist,
+                                                budget,
+                                                args.kmeans_iters,
+                                                args.fine_train_steps,
+                                                args.coarse_train_steps + args.coarse_hard_steps,
+                                                fine_loss,
+                                                hard_loss,
+                                                weighted_scores,
+                                                exact_scores,
+                                                eval_positions,
+                                                eval_top_idx,
+                                                eval_top_valid,
+                                                aggregate,
+                                            )
                             del weighted_codebooks, weighted_codes, weighted_scores
                             if device.type == "cuda":
                                 torch.cuda.empty_cache()
