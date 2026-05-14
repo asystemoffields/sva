@@ -372,6 +372,7 @@ def main() -> None:
     parser.add_argument("--coarse-label-topk", type=int, default=512)
     parser.add_argument("--coarse-label-source", choices=["fine_pq", "attention"], default="fine_pq")
     parser.add_argument("--weighted-coarse-boosts", default="")
+    parser.add_argument("--weighted-coarse-space", choices=["fine", "supervised", "both"], default="fine")
     parser.add_argument("--coarse-configs", default="4x16,4x64,8x16")
     parser.add_argument("--fine-configs", default="16x256")
     parser.add_argument("--shortlists", default="1024,2048,4096")
@@ -470,6 +471,7 @@ def main() -> None:
     print(f"coarse_label_topk,{args.coarse_label_topk}")
     print(f"coarse_label_source,{args.coarse_label_source}")
     print(f"weighted_coarse_boosts,{';'.join(f'{value:g}' for value in weighted_coarse_boosts)}")
+    print(f"weighted_coarse_space,{args.weighted_coarse_space}")
     print(f"coarse_configs,{';'.join(f'{a}x{b}' for a, b in coarse_configs)}")
     print(f"fine_configs,{';'.join(f'{a}x{b}' for a, b in fine_configs)}")
     print(f"shortlists,{';'.join(str(value) for value in shortlists)}")
@@ -726,7 +728,7 @@ def main() -> None:
             coarse_label_idx = train_fine_label_idx
             coarse_label_valid = train_fine_label_valid
 
-        if weighted_coarse_boosts:
+        if weighted_coarse_boosts and args.weighted_coarse_space in ("fine", "both"):
             for boost in weighted_coarse_boosts:
                 weights = key_label_weights(
                     coarse_label_idx,
@@ -882,6 +884,82 @@ def main() -> None:
                 if device.type == "cuda":
                     torch.cuda.empty_cache()
 
+            if weighted_coarse_boosts and args.weighted_coarse_space in ("supervised", "both"):
+                for boost in weighted_coarse_boosts:
+                    weights = key_label_weights(
+                        coarse_label_idx,
+                        coarse_label_valid,
+                        train_seq_len,
+                        boost,
+                        device,
+                    )
+                    for coarse_subspaces, coarse_codewords in coarse_configs:
+                        if coarse_rank_dim % coarse_subspaces != 0:
+                            continue
+                        weighted_codebooks = fit_weighted_product_codebooks(
+                            train_coarse_k_low,
+                            weights,
+                            coarse_subspaces,
+                            coarse_codewords,
+                            args.kmeans_iters,
+                            args.seed
+                            + layer_idx * 1000
+                            + coarse_rank_dim * 17
+                            + int(boost * 1000)
+                            + coarse_subspaces * 101
+                            + coarse_codewords,
+                            args.assign_chunk_size,
+                        )
+                        weighted_codes = encode_product_keys(eval_coarse_k_low, weighted_codebooks, args.assign_chunk_size)
+                        weighted_scores = product_quantized_scores(
+                            eval_coarse_q_low,
+                            weighted_codebooks,
+                            weighted_codes,
+                            coarse_rank_dim,
+                        )
+                        actual_coarse_codewords = int(weighted_codebooks.shape[2])
+                        print(
+                            "progress,weighted_supervised_coarse_pq_ready,"
+                            f"{layer_idx},{coarse_rank_dim},{boost:g},{coarse_subspaces},{actual_coarse_codewords}",
+                            flush=True,
+                        )
+                        for (fine_subspaces, fine_codewords), fine_scores in fine_score_cache.items():
+                            for shortlist in shortlists:
+                                for budget in budgets:
+                                    if shortlist < budget:
+                                        continue
+                                    evaluate_stage(
+                                        f"weighted_supervised_coarse_to_fine_b{boost_label(boost)}",
+                                        layer_idx,
+                                        eval_seq_len,
+                                        args.fine_rank_dim,
+                                        coarse_rank_dim,
+                                        args.coarse_label_topk,
+                                        coarse_subspaces,
+                                        actual_coarse_codewords,
+                                        fine_subspaces,
+                                        fine_codewords,
+                                        shortlist,
+                                        budget,
+                                        args.kmeans_iters,
+                                        args.fine_train_steps,
+                                        args.coarse_train_steps,
+                                        fine_loss,
+                                        coarse_loss,
+                                        weighted_scores,
+                                        fine_scores,
+                                        eval_positions,
+                                        eval_top_idx,
+                                        eval_top_valid,
+                                        aggregate,
+                                    )
+                        del weighted_codebooks, weighted_codes, weighted_scores
+                        if device.type == "cuda":
+                            torch.cuda.empty_cache()
+                    del weights
+                    if device.type == "cuda":
+                        torch.cuda.empty_cache()
+
             del coarse_ranker, train_coarse_k_low, eval_coarse_k_low, eval_coarse_q_low
             if device.type == "cuda":
                 torch.cuda.empty_cache()
@@ -918,7 +996,9 @@ def main() -> None:
             budget,
             args.kmeans_iters if label != "exact_ranker" else 0,
             args.fine_train_steps,
-            args.coarse_train_steps if label == "supervised_coarse_to_fine" else 0,
+            args.coarse_train_steps
+            if label == "supervised_coarse_to_fine" or label.startswith("weighted_supervised_coarse_to_fine")
+            else 0,
             float("nan"),
             float("nan"),
             bucket["exact_counts"],  # type: ignore[arg-type]
