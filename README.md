@@ -260,6 +260,7 @@ The answer-KL+CE adapter also held on a broader 24-case held-out panel with eigh
 - `modal_h100_late4_answer_ce_distill.py`: Modal H100 runner for tight-budget late4 answer-token KL plus gold-CE distillation.
 - `modal_h100_late4_answerce_adapter_answer.py`: Modal H100 runner for answer-decode validation of the answer-KL+CE late4 adapter.
 - `modal_h100_late4_answerce_broad_panel.py`: Modal H100 runner for broader held-out validation of the answer-KL+CE late4 adapter.
+- `modal_h100_late4_answerce_inverted_panel.py`: Modal H100 runner for indexed-summon validation of the answer-KL+CE late4 adapter.
 - `modal_h100_block_elevator.py`: Modal H100 runner for block-first SVA elevator benchmarking.
 - `modal_h100_block_hybrid.py`: Modal H100 runner for token/block hybrid SVA benchmarking.
 - `modal_h100_learned_hybrid_selector.py`: Modal H100 runner for learned token/block selector benchmarking.
@@ -443,6 +444,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_bac
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-late4-answer-ce-distill -ModalFile modal_h100_late4_answer_ce_distill.py
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-late4-answerce-adapter-answer -ModalFile modal_h100_late4_answerce_adapter_answer.py
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-late4-answerce-broad-panel -ModalFile modal_h100_late4_answerce_broad_panel.py
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-late4-answerce-inverted-panel -ModalFile modal_h100_late4_answerce_inverted_panel.py
 ```
 
 The launcher uses `modal run --detach` and writes local metadata, stdout, stderr, and result files under `results/modal_runs/`.
