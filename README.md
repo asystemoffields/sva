@@ -154,6 +154,8 @@ Layer-selective prefill drift gives the strongest socketing signal so far. With 
 
 The full answer test transfers the `late10` signal. At `32768`, all-layer SVA had answer NLL delta `0.152243`, KL `1.560773`, and logit cosine `0.744593`. The `late10` socket reached answer NLL delta `-0.001995`, KL `0.028690`, and logit cosine `0.999246`, while keeping the SVA-layer exact read reduction at `16x`. At `16384`, `sparse6` was best on gold answer NLL, while `late10` was best on distribution preservation, so the next run is a late-layer boundary sweep.
 
+The late-boundary sweep moves the current socket target to `late4`. Replacing only layers `26-29` gave the lowest KL at both tested contexts: at `32768`, answer NLL delta `0.023928`, KL `0.005527`, top-1 agreement `1.000000`, and logit cosine `0.999898`. Larger late sockets sometimes improved gold answer NLL, but they drifted farther from full attention. The next run tests `late4` across multiple passkeys and passkey placements.
+
 ## Files
 
 - `experiments/sva_kill_test.py`: standalone toy benchmark.
@@ -230,6 +232,7 @@ The full answer test transfers the `late10` signal. At `32768`, all-layer SVA ha
 - `modal_h100_passkey_layer_selective_prefill.py`: Modal H100 runner for layer-selective passkey prefill-drift sweeps.
 - `modal_h100_passkey_layer_selective_language.py`: Modal H100 runner for layer-selective passkey answer sweeps.
 - `modal_h100_passkey_late_boundary_language.py`: Modal H100 runner for late-layer passkey answer boundary sweeps.
+- `modal_h100_passkey_late4_robustness.py`: Modal H100 runner for multi-key, multi-placement late4 passkey checks.
 - `modal_h100_block_elevator.py`: Modal H100 runner for block-first SVA elevator benchmarking.
 - `modal_h100_block_hybrid.py`: Modal H100 runner for token/block hybrid SVA benchmarking.
 - `modal_h100_learned_hybrid_selector.py`: Modal H100 runner for learned token/block selector benchmarking.
@@ -323,6 +326,7 @@ The full answer test transfers the `late10` signal. At `32768`, all-layer SVA ha
 - `results/passkey_prefill_drift_profiles_snapshot_2026-05-14.md`: final-prompt passkey prefill drift across routed profiles.
 - `results/passkey_layer_selective_prefill_snapshot_2026-05-14.md`: layer-selective final-prompt passkey prefill drift.
 - `results/passkey_layer_selective_language_snapshot_2026-05-14.md`: layer-selective full-answer passkey scoring.
+- `results/passkey_late_boundary_language_snapshot_2026-05-14.md`: late-layer boundary passkey answer sweep.
 - `results/hf_artifacts/sva-smollm2-135m-2x256-v1/`: local HF/GitHub-ready `2x256` SVA artifact bundle.
 - `results/hf_artifacts/sva-smollm2-135m-2x256-longctx-refresh-v1/`: local HF/GitHub-ready long-context refreshed `2x256` SVA artifact bundle.
 - `results/hf_artifacts/sva-smollm2-135m-2x256-attnweighted-v1/`: local HF/GitHub-ready attention-weighted long-context `2x256` SVA artifact bundle.
@@ -392,6 +396,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_bac
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-passkey-layer-selective-prefill -ModalFile modal_h100_passkey_layer_selective_prefill.py
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-passkey-layer-selective-language -ModalFile modal_h100_passkey_layer_selective_language.py
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-passkey-late-boundary-language -ModalFile modal_h100_passkey_late_boundary_language.py
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-passkey-late4-robustness -ModalFile modal_h100_passkey_late4_robustness.py
 ```
 
 The launcher uses `modal run --detach` and writes local metadata, stdout, stderr, and result files under `results/modal_runs/`.

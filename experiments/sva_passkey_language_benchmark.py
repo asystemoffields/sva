@@ -316,6 +316,7 @@ def main() -> None:
     parser.add_argument("--teacher-context-max", type=int, default=32768)
     parser.add_argument("--placements", default="start")
     parser.add_argument("--key", default="731942")
+    parser.add_argument("--keys", default="")
     parser.add_argument("--shortlist", type=int, default=2048)
     parser.add_argument("--budget", type=int, default=512)
     parser.add_argument("--assign-chunk-size", type=int, default=8192)
@@ -356,6 +357,7 @@ def main() -> None:
 
     contexts = comma_ints(args.contexts)
     placements = comma_strings(args.placements)
+    keys = comma_strings(args.keys) if args.keys else [args.key]
     socket_layers = parse_layer_list(args.socket_layers, len(model.model.layers))
 
     print("passkey_language_start", flush=True)
@@ -368,60 +370,62 @@ def main() -> None:
         print(f"long_artifact_min_context,{args.long_artifact_min_context}", flush=True)
     print(f"contexts,{args.contexts}", flush=True)
     print(f"placements,{args.placements}", flush=True)
+    print(f"keys,{','.join(keys)}", flush=True)
     print(f"summon_mode,{args.summon_mode}", flush=True)
     print(f"socket_layers,{format_layer_list(socket_layers)}", flush=True)
 
-    for context in contexts:
-        for placement in placements:
-            case = build_prompt_case(tokenizer, context, args.key, placement, device)
-            full_result: ScoreResult | None = None
-            if context <= args.teacher_context_max:
-                full_result = score_answer_decode(model, case, device, patcher=None)
-                emit_score("passkey_language_row", "full", case, full_result)
+    for key in keys:
+        for context in contexts:
+            for placement in placements:
+                case = build_prompt_case(tokenizer, context, key, placement, device)
+                full_result: ScoreResult | None = None
+                if context <= args.teacher_context_max:
+                    full_result = score_answer_decode(model, case, device, patcher=None)
+                    emit_score("passkey_language_row", "full", case, full_result)
 
-            selected_artifact_dir = args.artifact_dir
-            sva_variant = "sva"
-            if args.long_artifact_dir is not None and context >= args.long_artifact_min_context:
-                selected_artifact_dir = args.long_artifact_dir
-                sva_variant = "sva_long"
+                selected_artifact_dir = args.artifact_dir
+                sva_variant = "sva"
+                if args.long_artifact_dir is not None and context >= args.long_artifact_min_context:
+                    selected_artifact_dir = args.long_artifact_dir
+                    sva_variant = "sva_long"
 
-            patcher = patch_llama_attention(
-                model,
-                selected_artifact_dir,
-                shortlist=args.shortlist,
-                budget=args.budget,
-                assign_chunk_size=args.assign_chunk_size,
-                query_chunk_size=args.query_chunk_size,
-                summon_mode=args.summon_mode,
-                inverted_cells_per_subspace=args.inverted_cells_per_subspace,
-                adaptive_min_budget=args.adaptive_min_budget,
-                adaptive_mid_budget=args.adaptive_mid_budget,
-                adaptive_low_margin=args.adaptive_low_margin,
-                adaptive_high_margin=args.adaptive_high_margin,
-                layers=socket_layers,
-            )
-            try:
-                sva_result = score_answer_decode(model, case, device, patcher=patcher)
-                emit_score("passkey_language_row", sva_variant, case, sva_result)
-            finally:
-                patcher.unpatch()
-
-            if full_result is not None and full_result.status == "ok" and sva_result.status == "ok":
-                comparison = compare_answer_logits(full_result, sva_result)
-                emit(
-                    "passkey_language_compare",
-                    {
-                        "context": context,
-                        "placement": placement,
-                        "variant": sva_variant,
-                        "answer_nll_delta": sva_result.answer_nll - full_result.answer_nll,
-                        "prefill_slowdown": sva_result.prefill_ms / max(full_result.prefill_ms, 1e-9),
-                        "decode_slowdown": sva_result.decode_ms / max(full_result.decode_ms, 1e-9),
-                        **comparison,
-                    },
+                patcher = patch_llama_attention(
+                    model,
+                    selected_artifact_dir,
+                    shortlist=args.shortlist,
+                    budget=args.budget,
+                    assign_chunk_size=args.assign_chunk_size,
+                    query_chunk_size=args.query_chunk_size,
+                    summon_mode=args.summon_mode,
+                    inverted_cells_per_subspace=args.inverted_cells_per_subspace,
+                    adaptive_min_budget=args.adaptive_min_budget,
+                    adaptive_mid_budget=args.adaptive_mid_budget,
+                    adaptive_low_margin=args.adaptive_low_margin,
+                    adaptive_high_margin=args.adaptive_high_margin,
+                    layers=socket_layers,
                 )
-            if device.type == "cuda":
-                torch.cuda.empty_cache()
+                try:
+                    sva_result = score_answer_decode(model, case, device, patcher=patcher)
+                    emit_score("passkey_language_row", sva_variant, case, sva_result)
+                finally:
+                    patcher.unpatch()
+
+                if full_result is not None and full_result.status == "ok" and sva_result.status == "ok":
+                    comparison = compare_answer_logits(full_result, sva_result)
+                    emit(
+                        "passkey_language_compare",
+                        {
+                            "context": context,
+                            "placement": placement,
+                            "variant": sva_variant,
+                            "answer_nll_delta": sva_result.answer_nll - full_result.answer_nll,
+                            "prefill_slowdown": sva_result.prefill_ms / max(full_result.prefill_ms, 1e-9),
+                            "decode_slowdown": sva_result.decode_ms / max(full_result.decode_ms, 1e-9),
+                            **comparison,
+                        },
+                    )
+                if device.type == "cuda":
+                    torch.cuda.empty_cache()
 
     print("passkey_language_done", flush=True)
 
