@@ -583,3 +583,101 @@ Next:
 4. Move from random vectors to a tiny PyTorch sequence model with learned keys and values.
 
 The key falsification test: receipt routing should close most of the gap between readable overflow and `overflow_oracle` on dense clusters.
+
+## SmolLM2 Socket Frontier
+
+The current SVA evidence has moved from toy lookup to pretrained model surgery. In `HuggingFaceTB/SmolLM2-135M-Instruct`, the strongest path is selective SVA socketing: keep the pretrained Q/K/V/O projections, RoPE, norms, MLPs, and logits, and replace selected attention score matrices with the three-stage SVA path.
+
+Latest frontier result:
+
+```text
+socketed layers                         loss_delta  KL        top1_agree  verified_top16_recall
+0,1,3,4,7,10                            0.007812    0.008817  0.994138    0.874180
+0,1,3,4,5,6,7,8,10                      0.011719    0.010025  0.992672    0.850978
+0,1,3,4,5,6,7,8,9,10,15,18              0.015625    0.014993  0.992672    0.828815
+0,1,3,4,5,6,7,8,9,10,13,15,17,18,21     0.019531    0.018851  0.991695    0.810719
+0,1,3,4,5,6,7,8,9,10,13,14,15,16,17,
+18,19,20,21,23                          0.757812    0.757605  0.860772    0.779792
+```
+
+Readout:
+
+- The frontier is smooth through 15 of 30 layers.
+- The 20-layer set breaks at the model level more than local recall alone predicts.
+- Layers `14`, `16`, `19`, `20`, and `21` are immediate suspects from the failed frontier's worst-head diagnostics.
+
+Next falsification test: add suspect layers one at a time to the 15-layer set, then repeat the bad additions under progressive artifact training. The theory should now be shaped around the 15-to-20 cliff.
+
+Cliff-map result:
+
+```text
+condition                  training      loss_delta  KL        top1_agree  verified_top16_recall
+base_15                    teacher       0.023438    0.024391  0.988764    0.811023
+add_14                     teacher       0.027344    0.028440  0.986810    0.807540
+add_16                     teacher       0.078125    0.078464  0.974597    0.799713
+add_19                     teacher       0.562500    0.562174  0.901808    0.797899
+add_20                     teacher       0.023438    0.024428  0.989253    0.810775
+add_23                     teacher       0.019531    0.018521  0.990718    0.813999
+add_14_16                  teacher       0.082031    0.081203  0.973131    0.796423
+add_19_20                  teacher       0.468750    0.463211  0.917929    0.793249
+frontier_20                teacher       0.757812    0.751164  0.862726    0.779580
+add_14_16                  progressive   0.066406    0.065821  0.982413    0.793548
+add_19_20                  progressive   0.128906    0.127494  0.977528    0.789265
+frontier_20                progressive   0.179688    0.179911  0.963850    0.781464
+```
+
+Layer `19` is the primary fault line. Progressive training helps a lot but leaves a quality gap. The next direct test is a per-layer fallback: socket the 20-layer frontier except layer `19`, and compare teacher versus progressive artifacts.
+
+Per-layer fallback result:
+
+```text
+condition             training      socketed_layers  loss_delta  KL        top1_agree  verified_top16_recall
+base_15               teacher       15               0.019531    0.018087  0.991207    0.810951
+add_19                progressive   16               0.156250    0.154671  0.977040    0.804819
+no_19                 teacher       19               0.097656    0.097367  0.967758    0.798275
+no_19                 progressive   19               0.074219    0.071809  0.977528    0.796193
+no_16_19              teacher       18               0.042969    0.042852  0.984367    0.809804
+no_16_19              progressive   18               0.039062    0.040822  0.985344    0.810279
+```
+
+The current best larger socket is 18 layers, keeping `16` and `19` as full attention. For a much larger model, this needs to become an automatic layer admission rule that measures downstream distribution preservation, not a hand-curated exception list.
+
+First admission-screen result:
+
+```text
+baseline socket set: 0,1,3,4,5,6,7,8,9,10,13,15,17,18,21
+
+admit:  2,12,14,20,22,23,24,25,26,27,28,29
+reject: 11,16,19
+
+final admitted socket set:
+0,1,2,3,4,5,6,7,8,9,10,12,13,14,15,17,18,20,21,22,23,24,25,26,27,28,29
+
+final teacher:     loss_delta=0.117188, KL=0.114144, top1=0.971666, verified_top16=0.750432
+final progressive: loss_delta=0.054688, KL=0.054555, top1=0.983390, verified_top16=0.786364
+```
+
+Caveat: this screened candidates against the base 15-layer set, then validated the combined admitted set. The next compiler-style version should test each candidate against the currently admitted set.
+
+The mechanism question was resolved as a harness/interface bug. Artifact training was deriving Q/K from layer-boundary hidden states, but Llama attention receives `input_layernorm(hidden_states)`. After applying the same input-layernorm before artifact Q/K extraction, the rejected-layer pattern disappeared.
+
+Norm-fixed cliff result:
+
+```text
+condition                  training      loss_delta  KL        top1_agree  verified_top16_recall
+base_15                    teacher       0.000000    0.000354  0.993161    0.999852
+add_16                     teacher       0.000000    0.000347  0.994138    0.999859
+add_19                     teacher       0.000000    0.000340  0.995115    0.999847
+frontier_20                teacher       0.000000    0.000355  0.995115    0.999799
+frontier_20                progressive   0.000000    0.000353  0.992672    0.999817
+```
+
+Norm-fixed all-layer result:
+
+```text
+condition        training      socketed_layers  loss_delta  KL        top1_agree  verified_top16_recall
+all layers       teacher       30               0.000000    0.000362  0.994626    0.999689
+all layers       progressive   30               0.000000    0.000361  0.996092    0.999703
+```
+
+The prior selective-layer, cliff, fallback, and admission snapshots are useful as a debugging trail, but their layer-fragility interpretation is stale. The corrected next target is the scale frontier: longer contexts, smaller shortlists and verifier budgets, and normalized-Q/K million-token simulations.

@@ -215,7 +215,8 @@ def main() -> None:
     aggregate: dict[tuple[int, int, int], dict[str, object]] = {}
     for layer_idx in layers:
         layer = model.model.layers[layer_idx]
-        hidden = hidden_states[layer_idx]
+        # HF Llama hidden_states are layer-boundary states; attention sees the input-layernormed state.
+        hidden = layer.input_layernorm(hidden_states[layer_idx])
         hidden_shape = (hidden.shape[0], hidden.shape[1], -1, layer.self_attn.head_dim)
         query = layer.self_attn.q_proj(hidden).view(hidden_shape).transpose(1, 2)
         key = layer.self_attn.k_proj(hidden).view(hidden_shape).transpose(1, 2)

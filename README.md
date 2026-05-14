@@ -92,6 +92,28 @@ The handoff diagnostic isolated the `2048` shortlist dip. On the same hard-negat
 
 The first synthetic million-token benchmark supports that target. With `4x64` coarse PQ over one million keys, exact rank-64 rescoring took about `1.00 ms` for one query and `2.16 ms` for four queries at shortlist `2048`, using about `1.15 GB` of bf16 rank-key memory for `9` heads. The exact rescore block itself was about `0.12 ms`; the measured cost is mostly coarse scan plus shortlist top-k. The next quality test is to socket this three-stage path into the SmolLM2 attention replacement harness.
 
+The first three-stage socket result initially appeared to find a layer-specific failure mode, but that result was traced to a harness/interface bug. Artifact training was deriving Q/K routes from layer-boundary hidden states, while Hugging Face's Llama attention receives `input_layernorm(hidden_states)`. After applying the same input-layernorm before artifact Q/K extraction, the apparent fragile-layer behavior disappeared.
+
+The corrected all-layer SmolLM2 socket result is now the strongest signal. At `seq_len=2048`, with `4x64` coarse PQ, `coarse_shortlist=1024`, and `budget=512`, replacing all 30 attention layers reached `loss_delta=0.000000`, `KL=0.000362`, `top1_agreement=0.994626`, `logit_cosine=0.997908`, and verified top-16 recall `0.999689` under teacher artifact training. Progressive artifact training was similarly strong: `KL=0.000361`, `top1_agreement=0.996092`, and verified top-16 recall `0.999703`.
+
+The first frozen-artifact deployment proxy also passed at `seq_len=2048`: artifacts trained on the base calibration stream stayed effectively lossless on paragraph-order shifts (`rotate`, `reverse`, and `odds_evens`). That is a useful leakage audit.
+
+The first full deployment benchmark is also positive. Artifacts frozen from 4096-token calibration documents were evaluated on held-out documents at 2048 and 4096 tokens. At `context=2048`, `coarse_shortlist=1024`, and `budget=512`, the all-layer socket reached `loss_delta=0.000000`, `KL=0.000165`, `top1_agreement=0.999145`, `logit_cosine=0.998157`, and verified top-16 recall `0.999083`. At `context=4096`, the same setting reached `loss_delta=0.000488`, `KL=0.000244`, `top1_agreement=0.999511`, `logit_cosine=0.990862`, and verified top-16 recall `0.995900`.
+
+The full-window held-out benchmark preserves the signal at SmolLM2's configured `8192` token context. At `context=8192`, `coarse_shortlist=1024`, and `budget=512`, the all-layer socket reached `loss_delta=0.000732`, `KL=0.000564`, `top1_agreement=0.999756`, `logit_cosine=0.984127`, and verified top-16 recall `0.991471`. At `coarse_shortlist=2048` and `budget=512`, it reached `loss_delta=0.000794`, `KL=0.000481`, `top1_agreement=0.999786`, `logit_cosine=0.989240`, and verified top-16 recall `0.998707`.
+
+The cached-decode benchmark splits quality from serving mechanics. With key-side low-rank catalogs and product codes precomputed once per layer, `context=8192`, `coarse_shortlist=2048`, and `budget=512` reached verified top-16 recall `0.998094`; `1024/512` reached `0.988018`. The current PyTorch lookup path is still slower than optimized full attention at 8192, around `3.1 ms` per decode lookup versus about `0.3 ms` for full attention in this harness, so the next systems frontier is a synthetic million-token cached decode test and then a fused/custom lookup path.
+
+The synthetic million-token cached-decode benchmark found the first no-custom-kernel speed opening. Vectorized PyTorch SVA over one million keys took about `1.02 ms` for one decode query at `2048/512`, versus about `2.09 ms` for full attention. At four queries it was roughly parity, and at sixteen queries it lost (`7.13 ms` versus `3.44 ms`) because coarse score construction and top-k scale with the query batch. The next speed target is SVA itself: train for tighter `512-1024` shortlist survival and make the summon budget adaptive by layer, head, and query.
+
+The tight-summon frontier shows that shortlist size is not the main no-kernel speed lever yet. Tightened artifact training at `context=8192` reached verified top-16 recall `0.962761` at `512/256`, `0.981497` at `768/256`, `0.989732` at `1024/256`, `0.995918` at `1536/256`, and `0.997870` at `2048/256`. At one million synthetic keys, vectorized SVA stayed around `0.96-0.97 ms` for one query across `512` through `2048` shortlists, while full attention was about `2.05-2.10 ms`. The cost is dominated by the full-cache coarse scan and top-k path, not the verifier.
+
+Compact coarse-code sweeps found the first clear no-custom-kernel speed lever. At `context=8192`, `2x256` coarse codes reached verified top-16 recall `0.988336` at `1024/256`, `0.995258` at `1536/256`, and `0.998271` at `2048/512`, close to `4x64` while reducing one-query million-token latency from about `1.03 ms` to about `0.78 ms`. The faster `1x256` branch reached `0.995985` at `2048/512` and cut one-query latency to about `0.65 ms`; it also reduced `q=16` latency from `7.13 ms` to about `4.00 ms`.
+
+The first deployable artifact bundle now exists locally at `results/hf_artifacts/sva-smollm2-135m-2x256-v1`. It contains all 30 layers for the `2x256` profile, with `bfloat16` low-rank projections and coarse codebooks, manifest metadata, default `2048/512` serving settings, and a small README. The bundle reloads through `experiments/sva_artifact_io.py` and is ready to publish as a Hugging Face artifact repo or GitHub release asset.
+
+The next target is publication: push the repo to GitHub, then publish the artifact folder to HF or attach it as a release asset.
+
 ## Files
 
 - `experiments/sva_kill_test.py`: standalone toy benchmark.
@@ -111,9 +133,31 @@ The first synthetic million-token benchmark supports that target. With `4x64` co
 - `experiments/sva_coarse_to_fine_pq_scan_benchmark.py`: synthetic million-token coarse-to-fine PQ scan throughput benchmark.
 - `experiments/sva_coarse_exact_rescore_benchmark.py`: synthetic million-token coarse PQ plus exact low-rank rescore benchmark.
 - `experiments/sva_supervised_coarse_pq_test.py`: supervised coarse-stage PQ lookup test.
+- `experiments/sva_deployment_socket_test.py`: frozen-artifact deployment proxy over simple text shifts.
+- `experiments/sva_full_deployment_benchmark.py`: held-out-document deployment benchmark with context and budget sweeps.
+- `experiments/sva_cached_decode_benchmark.py`: cached-key decode benchmark that separates lookup quality from full-socket harness overhead.
+- `experiments/sva_million_cached_decode_benchmark.py`: synthetic million-token cached-decode benchmark comparing full attention with SVA lookup variants.
+- `experiments/sva_artifact_io.py`: save/load helpers for portable frozen SVA artifact bundles.
+- `experiments/export_sva_artifact.py`: exporter for HF/GitHub-ready SVA artifact folders.
 - `experiments/sva_address_scaling.py`: address selectivity calculator for long contexts.
 - `modal_h100_trainable.py`: Modal H100 runner for the trainable benchmark.
 - `modal_h100_socket.py`: Modal H100 runner for the pretrained socket sweep.
+- `modal_h100_three_stage_socket.py`: Modal H100 runner for the three-stage pretrained socket test.
+- `modal_h100_three_stage_socket_layers.py`: Modal H100 runner for layer-isolated three-stage socket tests.
+- `modal_h100_three_condition_socket.py`: Modal H100 runner for hidden-state, progressive, and selective-hybrid socket conditions.
+- `modal_h100_layer_frontier.py`: Modal H100 runner for selective socket layer-frontier tests.
+- `modal_h100_layer_cliff.py`: Modal H100 runner for selective socket cliff-mapping tests.
+- `modal_h100_layer_fallback.py`: Modal H100 runner for selective socket per-layer fallback tests.
+- `modal_h100_layer_admission.py`: Modal H100 runner for automatic selective socket admission screening.
+- `modal_h100_normfix_all_layers.py`: Modal H100 runner for all-layer socket tests after the attention-input normalization fix.
+- `modal_h100_deployment_socket.py`: Modal H100 runner for the frozen-artifact deployment proxy.
+- `modal_h100_full_deployment_benchmark.py`: Modal H100 runner for the held-out deployment benchmark.
+- `modal_h100_full_deployment_8192.py`: Modal H100 runner for the full-window 8192 held-out deployment benchmark.
+- `modal_h100_cached_decode_benchmark.py`: Modal H100 runner for the cached-key decode benchmark.
+- `modal_h100_million_cached_decode.py`: Modal H100 runner for synthetic million-token cached-decode throughput.
+- `modal_h100_tight_summon_frontier.py`: Modal H100 runner for the tight-shortlist quality/speed frontier.
+- `modal_h100_compact_summon_frontier.py`: Modal H100 runner for compact coarse-code quality/speed frontier sweeps.
+- `modal_h100_export_sva_artifact.py`: Modal H100 runner that exports the default `2x256` SVA artifact bundle to a Modal volume.
 - `modal_h100_million_stream.py`: Modal H100 runner for the million-token address-pressure simulation.
 - `modal_h100_learned_ranker.py`: Modal H100 runner for the learned compressed-ranker test.
 - `modal_h100_learned_ranker_generalize.py`: Modal H100 runner for the held-out-text ranker test.
@@ -163,6 +207,21 @@ The first synthetic million-token benchmark supports that target. With `4x64` co
 - `results/hard_supervised_coarse_pq_snapshot_2026-05-13.md`: hard-negative supervised coarse PQ snapshot.
 - `results/hard_pool_sweep_snapshot_2026-05-13.md`: hard-negative mining-pool sweep snapshot.
 - `results/hard_handoff_snapshot_2026-05-13.md`: hard-negative handoff diagnostic snapshot.
+- `results/three_stage_socket_snapshot_2026-05-13.md`: three-stage socket and layer-isolation snapshot.
+- `results/three_condition_socket_snapshot_2026-05-13.md`: hidden-state, progressive, and selective-hybrid socket comparison.
+- `results/layer_frontier_snapshot_2026-05-13.md`: selective socket layer-frontier snapshot.
+- `results/layer_cliff_snapshot_2026-05-13.md`: selective socket cliff-mapping snapshot.
+- `results/layer_fallback_snapshot_2026-05-13.md`: selective socket per-layer fallback snapshot.
+- `results/layer_admission_snapshot_2026-05-13.md`: automatic selective socket admission snapshot.
+- `results/normfix_socket_audit_snapshot_2026-05-13.md`: attention-input normalization fix and corrected all-layer socket snapshot.
+- `results/full_deployment_benchmark_snapshot_2026-05-14.md`: first held-out deployment benchmark snapshot.
+- `results/full_deployment_8192_snapshot_2026-05-14.md`: full-window 8192 held-out deployment benchmark snapshot.
+- `results/cached_decode_benchmark_snapshot_2026-05-14.md`: cached-key decode benchmark snapshot.
+- `results/million_cached_decode_benchmark_snapshot_2026-05-14.md`: synthetic million-token cached-decode throughput snapshot.
+- `results/tight_summon_frontier_snapshot_2026-05-14.md`: tight-shortlist quality and million-token speed frontier snapshot.
+- `results/compact_summon_frontier_snapshot_2026-05-14.md`: compact coarse-code quality and million-token speed frontier snapshot.
+- `results/artifact_export_snapshot_2026-05-14.md`: first local deployable SVA artifact export snapshot.
+- `results/hf_artifacts/sva-smollm2-135m-2x256-v1/`: local HF/GitHub-ready `2x256` SVA artifact bundle.
 - `notes/attention_replacement_findings.md`: broader research log leading to SVA.
 - `notes/hierarchical_tree_sva.md`: side-track notes for hierarchical chunk/tree SVA.
 - `notes/million_token_scaling.md`: scaling target for million-token contexts.
@@ -172,6 +231,7 @@ The first synthetic million-token benchmark supports that target. With `4x64` co
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-trainable
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-socket -ModalFile modal_h100_socket.py
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-three-stage-socket -ModalFile modal_h100_three_stage_socket.py
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-million-stream -ModalFile modal_h100_million_stream.py
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-learned-ranker -ModalFile modal_h100_learned_ranker.py
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-learned-ranker-generalize -ModalFile modal_h100_learned_ranker_generalize.py
@@ -193,6 +253,21 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_bac
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-hard-supervised-coarse-pq -ModalFile modal_h100_hard_supervised_coarse_pq.py
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-hard-pool-sweep -ModalFile modal_h100_hard_pool_sweep.py
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-hard-handoff -ModalFile modal_h100_hard_handoff.py
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-three-stage-socket-layers -ModalFile modal_h100_three_stage_socket_layers.py
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-three-condition-socket -ModalFile modal_h100_three_condition_socket.py
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-layer-frontier -ModalFile modal_h100_layer_frontier.py
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-layer-cliff -ModalFile modal_h100_layer_cliff.py
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-layer-fallback -ModalFile modal_h100_layer_fallback.py
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-layer-admission -ModalFile modal_h100_layer_admission.py
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-normfix-all-layers -ModalFile modal_h100_normfix_all_layers.py
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-deployment-socket -ModalFile modal_h100_deployment_socket.py
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-full-deployment-benchmark -ModalFile modal_h100_full_deployment_benchmark.py
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-full-deployment-8192 -ModalFile modal_h100_full_deployment_8192.py
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-cached-decode-benchmark -ModalFile modal_h100_cached_decode_benchmark.py
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-million-cached-decode -ModalFile modal_h100_million_cached_decode.py
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-tight-summon-frontier -ModalFile modal_h100_tight_summon_frontier.py
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-compact-summon-frontier -ModalFile modal_h100_compact_summon_frontier.py
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-export-artifact -ModalFile modal_h100_export_sva_artifact.py
 ```
 
 The launcher uses `modal run --detach` and writes local metadata, stdout, stderr, and result files under `results/modal_runs/`.
