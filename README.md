@@ -174,6 +174,8 @@ The answer-KL+CE adapter also held on a broader 24-case held-out panel with eigh
 
 The first indexed-summon check on that same 24-case panel is quality-credible but slower in the current PyTorch path. With inverted decode at `16` cells/subspace, the CE001 adapter reached answer KL `0.032604`, top-1 `0.922619`, cosine `0.999239`, and NLL delta `-0.434830`; at `32` cells/subspace it reached KL `0.028585`, top-1 `0.898810`, cosine `0.999453`, and NLL delta `-0.320555`. Decode slowdown was about `3.3x` versus full attention, worse than the scan row's `1.82x`, because the posting-list union still summons thousands of candidates before exact verification. The next test tightens indexed budgets to `4` and `8` cells/subspace.
 
+The tighter indexed check shows the current speed wall is implementation-side. At `8` cells/subspace, CE001 reached answer KL `0.038735`, top-1 `0.910714`, cosine `0.992045`, and NLL delta `-0.425858`; at `4`, KL drifted to `0.082317` and cosine to `0.989791` while NLL delta stayed strong at `-0.452635`. Decode slowdown stayed near `3.1x` in both settings, even though decode summoned counts fell sharply, so the bottleneck is now the Python/posting-list/gather path rather than verifier reads. The next test is `1` and `2` cells/subspace as an overhead floor.
+
 ## Files
 
 - `experiments/sva_kill_test.py`: standalone toy benchmark.
@@ -366,6 +368,7 @@ The first indexed-summon check on that same 24-case panel is quality-credible bu
 - `results/late4_answer_ce_distill_snapshot_2026-05-14.md`: answer-token KL plus gold-CE distillation and full answer-decode validation at tight late4 budget.
 - `results/late4_answerce_broad_panel_snapshot_2026-05-14.md`: broader held-out validation of the answer-KL+CE late4 adapter.
 - `results/late4_answerce_inverted_panel_snapshot_2026-05-14.md`: indexed-summon validation of the answer-KL+CE late4 adapter.
+- `results/late4_answerce_inverted_tight_panel_snapshot_2026-05-14.md`: tighter `4/8` cells indexed-summon validation of the answer-KL+CE late4 adapter.
 - `results/hf_artifacts/sva-smollm2-135m-2x256-v1/`: local HF/GitHub-ready `2x256` SVA artifact bundle.
 - `results/hf_artifacts/sva-smollm2-135m-2x256-longctx-refresh-v1/`: local HF/GitHub-ready long-context refreshed `2x256` SVA artifact bundle.
 - `results/hf_artifacts/sva-smollm2-135m-2x256-attnweighted-v1/`: local HF/GitHub-ready attention-weighted long-context `2x256` SVA artifact bundle.
