@@ -117,6 +117,9 @@ def fit_calibration_codebooks(
     seed: int,
     device: torch.device,
 ) -> tuple[dict[tuple[str, int], torch.Tensor], dict[tuple[str, int], torch.Tensor | None]]:
+    if not any(is_calibration_variant(variant) for variant in variants):
+        return {}, {}
+
     seq_len = int(calibration_batch["input_ids"].shape[1])
     output = model(**calibration_batch, use_cache=False, output_hidden_states=True)
     if output.hidden_states is None:

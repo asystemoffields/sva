@@ -54,6 +54,8 @@ The rotation diagnostic found a large codebook-quality opening. At budgets `512/
 
 Held-out codebook refresh confirmed the codebook-quality opening. At `32768`, the frozen artifact reached teacher top-16 recall `0.563169/0.657407/0.752450` at budgets `512/1024/2048`; calibration-fit codebooks lifted those to `0.635887/0.726002/0.809995`, close to the eval-key refit upper bound `0.645553/0.734592/0.816090`. The Shannon-style diagnostic is clear: normalized code entropy rose from `0.718895` to about `0.978`, and the largest average code bucket fell from `0.230200` to about `0.0144`. At `8192`, the frozen artifact remains best, which points to context-matched catalog profiles rather than one global codebook.
 
+The first refreshed long-context artifact now exists locally at `results/hf_artifacts/sva-smollm2-135m-2x256-longctx-refresh-v1`. It preserves the long-context gain as a deployable profile: at `32768`, it reaches teacher top-16 recall `0.630588/0.725071/0.809860` at budgets `512/1024/2048`, with score cosine `0.945643`, normalized code entropy `0.978694`, and max code fraction `0.014597`. At `8192`, it reaches `0.952637/0.988589/0.998788`, below the original artifact's `0.972367/0.993978/0.999295`, so the next production path is profile routing.
+
 ## Million-Token Constraint
 
 At a 1,000,000-token context, average prefix length is about 500,000. A usable replacement should keep exact full-dimensional QK scoring in the rough range of 128 to 1024 candidates per query.
@@ -123,10 +125,9 @@ The important refinement is distribution matching. High code entropy is useful w
 
 ## Next Verification Step
 
-The next architectural test is context-matched serving for the learned ranker:
+The next architectural test is language-facing context-matched serving:
 
 - keep the exact verifier unchanged
-- export a calibration-refreshed long-context `2x256` profile
 - compare the current 8k artifact, the refreshed long-context profile, and a context-length router
 - track recall, score distortion, normalized code entropy, max code load, value reads, and wall time
 - rerun the passkey and long-context recall benchmarks with the selected profile

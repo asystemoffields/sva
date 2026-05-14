@@ -136,6 +136,8 @@ The rotation diagnostic found a large codebook-quality opening. Against the froz
 
 Held-out codebook refresh confirmed that the codebook-quality opening generalizes. At `32768`, the frozen artifact reached teacher top-16 recall `0.563169/0.657407/0.752450` at budgets `512/1024/2048`. Calibration-fit codebooks lifted those to `0.635887/0.726002/0.809995`, close to the eval-refit upper bound `0.645553/0.734592/0.816090`. The catalog-quality signal is Shannon-shaped: normalized code entropy rose from `0.718895` to about `0.978`, while the largest average code bucket fell from `0.230200` to about `0.0144`. At `8192`, the frozen artifact remains best, so the next deployable shape is context-matched profiles plus a simple context-length router.
 
+The first long-context refreshed artifact is now exported at `results/hf_artifacts/sva-smollm2-135m-2x256-longctx-refresh-v1`. It reloads through the production artifact loader and reproduces the long-context refresh result: at `32768`, it reaches teacher top-16 recall `0.630588/0.725071/0.809860` at budgets `512/1024/2048`, with score cosine `0.945643` and normalized code entropy `0.978694`. At `8192`, it trails the original artifact, so the next production test is profile routing: original artifact for 8k, refreshed artifact for 16k/32k.
+
 ## Files
 
 - `experiments/sva_kill_test.py`: standalone toy benchmark.
@@ -211,6 +213,7 @@ Held-out codebook refresh confirmed that the codebook-quality opening generalize
 - `modal_h100_span_statement.py`: Modal H100 runner for passkey span-statement benchmarking.
 - `modal_h100_rotation_diagnostic.py`: Modal H100 runner for low-rank rotation diagnostics.
 - `modal_h100_codebook_refresh.py`: Modal H100 runner for held-out calibration-time codebook refresh.
+- `modal_h100_refreshed_profile_recall.py`: Modal H100 runner for exported refreshed-profile recall sanity checks.
 - `modal_h100_million_stream.py`: Modal H100 runner for the million-token address-pressure simulation.
 - `modal_h100_learned_ranker.py`: Modal H100 runner for the learned compressed-ranker test.
 - `modal_h100_learned_ranker_generalize.py`: Modal H100 runner for the held-out-text ranker test.
@@ -285,7 +288,9 @@ Held-out codebook refresh confirmed that the codebook-quality opening generalize
 - `results/span_statement_snapshot_2026-05-14.md`: span-statement verifier benchmark snapshot.
 - `results/rotation_diagnostic_snapshot_2026-05-14.md`: low-rank rotation and codebook-fit diagnostic snapshot.
 - `results/codebook_refresh_snapshot_2026-05-14.md`: held-out calibration-time codebook refresh snapshot.
+- `results/refreshed_profile_snapshot_2026-05-14.md`: exported long-context refreshed artifact and recall sanity snapshot.
 - `results/hf_artifacts/sva-smollm2-135m-2x256-v1/`: local HF/GitHub-ready `2x256` SVA artifact bundle.
+- `results/hf_artifacts/sva-smollm2-135m-2x256-longctx-refresh-v1/`: local HF/GitHub-ready long-context refreshed `2x256` SVA artifact bundle.
 - `notes/attention_replacement_findings.md`: broader research log leading to SVA.
 - `notes/hierarchical_tree_sva.md`: side-track notes for hierarchical chunk/tree SVA.
 - `notes/million_token_scaling.md`: scaling target for million-token contexts.
@@ -341,6 +346,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_bac
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-span-statement -ModalFile modal_h100_span_statement.py
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-rotation-diagnostic -ModalFile modal_h100_rotation_diagnostic.py
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-codebook-refresh -ModalFile modal_h100_codebook_refresh.py
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-refreshed-profile-recall -ModalFile modal_h100_refreshed_profile_recall.py
 ```
 
 The launcher uses `modal run --detach` and writes local metadata, stdout, stderr, and result files under `results/modal_runs/`.
