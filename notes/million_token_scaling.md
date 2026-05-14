@@ -68,6 +68,8 @@ The final-query passkey key-survival diagnostic found low but similar survival a
 
 The prefill-drift benchmark confirms that diagnosis. At `32768`, first-answer-token NLL deltas before decoding were original `1.037624`, plain refresh `1.684878`, boost2 `2.515614`, and strong attention `0.992831`. Strong attention kept high final-prompt logit cosine (`0.970458`) but still had high KL (`2.148224`). All-layer SVA is accumulating representation drift over the prompt.
 
+Layer-selective prefill drift gives a better socketing target. At `32768`, strong attention all-layer SVA had first-answer-token NLL delta `0.992831` and KL `2.148224`. Socketing only layers `20-29` cut that to `0.035455` NLL delta and `0.019850` KL, while preserving top-1 agreement and reaching logit cosine `0.999362`. The current quality path is late-layer SVA socketing plus a faster indexed summon path.
+
 ## Million-Token Constraint
 
 At a 1,000,000-token context, average prefix length is about 500,000. A usable replacement should keep exact full-dimensional QK scoring in the rough range of 128 to 1024 candidates per query.
@@ -137,11 +139,10 @@ The important refinement is distribution matching. High code entropy can coincid
 
 ## Next Verification Step
 
-The next architectural test is layer-selective prefill drift:
+The next architectural test is layer-selective answer quality:
 
-- add layer-selective runtime patching to the production adapter
-- sweep 32K passkey prefill drift over layer groups
-- identify fragile layers that should stay full-attention
-- keep strong attention as the best current long-context profile, but test it selectively rather than all-layer
+- run full passkey answer scoring for all-layer, `sparse6`, and `late10`
+- keep strong attention as the current long-context profile
+- treat `late10` as the first production-shaped socket candidate if answer NLL/KL follows the prefill result
 - track recall, evidence survival, answer NLL, score distortion, normalized code entropy, max code load, value reads, and wall time
 - keep replacing scan prefill with indexed/elevator summon

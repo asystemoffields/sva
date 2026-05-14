@@ -25,6 +25,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from sva import SVALlamaPatcher, patch_llama_attention
+from sva_pretrained_socket_test import format_layer_list, parse_layer_list
 
 
 FILLER = (
@@ -320,6 +321,7 @@ def main() -> None:
     parser.add_argument("--assign-chunk-size", type=int, default=8192)
     parser.add_argument("--query-chunk-size", type=int, default=128)
     parser.add_argument("--summon-mode", choices=["scan", "inverted"], default="inverted")
+    parser.add_argument("--socket-layers", default="")
     parser.add_argument("--inverted-cells-per-subspace", type=int, default=32)
     parser.add_argument("--adaptive-min-budget", type=int, default=128)
     parser.add_argument("--adaptive-mid-budget", type=int, default=256)
@@ -354,6 +356,7 @@ def main() -> None:
 
     contexts = comma_ints(args.contexts)
     placements = comma_strings(args.placements)
+    socket_layers = parse_layer_list(args.socket_layers, len(model.model.layers))
 
     print("passkey_language_start", flush=True)
     print(f"model_id,{args.model_id}", flush=True)
@@ -366,6 +369,7 @@ def main() -> None:
     print(f"contexts,{args.contexts}", flush=True)
     print(f"placements,{args.placements}", flush=True)
     print(f"summon_mode,{args.summon_mode}", flush=True)
+    print(f"socket_layers,{format_layer_list(socket_layers)}", flush=True)
 
     for context in contexts:
         for placement in placements:
@@ -394,6 +398,7 @@ def main() -> None:
                 adaptive_mid_budget=args.adaptive_mid_budget,
                 adaptive_low_margin=args.adaptive_low_margin,
                 adaptive_high_margin=args.adaptive_high_margin,
+                layers=socket_layers,
             )
             try:
                 sva_result = score_answer_decode(model, case, device, patcher=patcher)

@@ -150,6 +150,8 @@ The passkey key-survival diagnostic points to prefill drift. At `32768`, final-q
 
 The prefill-drift benchmark confirms the long-context failure mode. At `32768`, first-answer-token NLL deltas before decoding were already large: original `1.037624`, plain refresh `1.684878`, boost2 `2.515614`, and strong attention `0.992831`. Strong attention has the best 32K final-prompt logit cosine (`0.970458`), but KL remains high (`2.148224`). The next implementation target is layer-selective socketing in the production adapter, so fragile layers can stay full attention while tolerant layers use SVA.
 
+Layer-selective prefill drift gives the strongest socketing signal so far. With the strong attention-weighted profile at `32768`, all-layer SVA had first-answer-token NLL delta `0.992831` and KL `2.148224`. Socketing only layers `20-29` cut that to NLL delta `0.035455` and KL `0.019850`, with full top-1 agreement and logit cosine `0.999362`. The next check is the full answer benchmark for `late10`, because the current signal is at the final prompt position before multi-token answer decode.
+
 ## Files
 
 - `experiments/sva_kill_test.py`: standalone toy benchmark.
@@ -223,6 +225,8 @@ The prefill-drift benchmark confirms the long-context failure mode. At `32768`, 
 - `modal_h100_attention_weighted_router_sweep.py`: Modal H100 runner for attention-weighted boost export plus passkey router sweeps.
 - `modal_h100_passkey_key_survival_profiles.py`: Modal H100 runner for profile-by-profile passkey key-survival diagnostics.
 - `modal_h100_passkey_prefill_drift_profiles.py`: Modal H100 runner for profile-by-profile passkey prefill-drift diagnostics.
+- `modal_h100_passkey_layer_selective_prefill.py`: Modal H100 runner for layer-selective passkey prefill-drift sweeps.
+- `modal_h100_passkey_layer_selective_language.py`: Modal H100 runner for layer-selective passkey answer sweeps.
 - `modal_h100_block_elevator.py`: Modal H100 runner for block-first SVA elevator benchmarking.
 - `modal_h100_block_hybrid.py`: Modal H100 runner for token/block hybrid SVA benchmarking.
 - `modal_h100_learned_hybrid_selector.py`: Modal H100 runner for learned token/block selector benchmarking.
@@ -314,6 +318,7 @@ The prefill-drift benchmark confirms the long-context failure mode. At `32768`, 
 - `results/attention_weighted_router_sweep_snapshot_2026-05-14.md`: mixed-strength attention-weighted routed profile sweep.
 - `results/passkey_key_survival_profiles_snapshot_2026-05-14.md`: final-query passkey evidence survival across routed profiles.
 - `results/passkey_prefill_drift_profiles_snapshot_2026-05-14.md`: final-prompt passkey prefill drift across routed profiles.
+- `results/passkey_layer_selective_prefill_snapshot_2026-05-14.md`: layer-selective final-prompt passkey prefill drift.
 - `results/hf_artifacts/sva-smollm2-135m-2x256-v1/`: local HF/GitHub-ready `2x256` SVA artifact bundle.
 - `results/hf_artifacts/sva-smollm2-135m-2x256-longctx-refresh-v1/`: local HF/GitHub-ready long-context refreshed `2x256` SVA artifact bundle.
 - `results/hf_artifacts/sva-smollm2-135m-2x256-attnweighted-v1/`: local HF/GitHub-ready attention-weighted long-context `2x256` SVA artifact bundle.
@@ -380,6 +385,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_bac
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-attnweighted-router-sweep -ModalFile modal_h100_attention_weighted_router_sweep.py
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-passkey-key-survival-profiles -ModalFile modal_h100_passkey_key_survival_profiles.py
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-passkey-prefill-drift-profiles -ModalFile modal_h100_passkey_prefill_drift_profiles.py
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-passkey-layer-selective-prefill -ModalFile modal_h100_passkey_layer_selective_prefill.py
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-passkey-layer-selective-language -ModalFile modal_h100_passkey_layer_selective_language.py
 ```
 
 The launcher uses `modal run --detach` and writes local metadata, stdout, stderr, and result files under `results/modal_runs/`.
