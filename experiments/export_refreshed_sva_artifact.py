@@ -20,11 +20,17 @@ if str(REPO_ROOT) not in sys.path:
 from sva import load_sva_artifact_bundle as load_runtime_bundle
 from sva_artifact_io import MANIFEST_NAME, WEIGHTS_NAME, load_sva_artifact_bundle, save_sva_artifact_bundle
 from sva_block_elevator_benchmark import layer_qkv_from_hidden
-from sva_codebook_refresh_benchmark import calibration_stream_to_length, emit
+from sva_codebook_refresh_benchmark import (
+    attention_boost_for_variant,
+    calibration_stream_to_length,
+    emit,
+    topk_key_weights,
+)
 from sva_full_deployment_benchmark import CALIBRATION_DOCS, load_documents
 from sva_pq_lookup_test import encode_product_keys, fit_product_codebooks
 from sva_pretrained_socket_test import encode_batch, format_layer_list, parse_layer_list
-from sva_rotation_diagnostic import mean_code_max_fraction, normalized_code_entropy
+from sva_rotation_diagnostic import mean_code_max_fraction, normalized_code_entropy, topk_targets
+from sva_supervised_coarse_pq_test import fit_weighted_product_codebooks
 
 
 def dtype_from_name(name: str, device: torch.device) -> torch.dtype:
@@ -70,6 +76,11 @@ def fit_refreshed_codebooks(
     runtime_bundle,
     calibration_batch: dict[str, torch.Tensor],
     layers: list[int],
+    refresh_method: str,
+    attention_topk: int,
+    calibration_query_samples: int,
+    min_query_pos: int,
+    attention_boost: float,
     kmeans_iters: int,
     assign_chunk_size: int,
     seed: int,
@@ -83,30 +94,57 @@ def fit_refreshed_codebooks(
     refreshed: dict[int, torch.Tensor] = {}
 
     for layer_idx in layers:
-        _, key_all, _, _ = layer_qkv_from_hidden(model, output.hidden_states, layer_idx, position_ids)
+        query_all, key_all, _, scaling = layer_qkv_from_hidden(model, output.hidden_states, layer_idx, position_ids)
         artifact = runtime_bundle.layers[layer_idx]
         k_proj = artifact.k_proj.to(device=device, dtype=torch.float32)
         k_low = torch.einsum("hkd,hdr->hkr", key_all.float(), k_proj)
-        codebooks = fit_product_codebooks(
-            k_low,
-            runtime_bundle.coarse_subspaces,
-            runtime_bundle.coarse_codewords,
-            kmeans_iters,
-            seed + layer_idx * 9973,
-            assign_chunk_size,
-        )
+        if refresh_method in {"attention_weighted", "attention_weighted_strong"}:
+            boost = attention_boost_for_variant(refresh_method, attention_boost)
+            start = max(0, min(min_query_pos, seq_len - 1))
+            query_positions = torch.linspace(
+                start,
+                seq_len - 1,
+                steps=min(calibration_query_samples, seq_len),
+                device=device,
+            ).long().unique()
+            full_scores = torch.einsum("hqd,hkd->hqk", query_all[:, query_positions].float(), key_all.float()) * scaling
+            top_idx, top_valid = topk_targets(full_scores, query_positions, attention_topk)
+            weights = topk_key_weights(top_idx, top_valid, seq_len, boost)
+            codebooks = fit_weighted_product_codebooks(
+                k_low,
+                weights,
+                runtime_bundle.coarse_subspaces,
+                runtime_bundle.coarse_codewords,
+                kmeans_iters,
+                seed + layer_idx * 9973,
+                assign_chunk_size,
+            )
+        else:
+            boost = 0.0
+            codebooks = fit_product_codebooks(
+                k_low,
+                runtime_bundle.coarse_subspaces,
+                runtime_bundle.coarse_codewords,
+                kmeans_iters,
+                seed + layer_idx * 9973,
+                assign_chunk_size,
+            )
         codes = encode_product_keys(k_low, codebooks, assign_chunk_size)
         emit(
             "refreshed_artifact_fit",
             {
                 "layer": layer_idx,
                 "calibration_seq_len": seq_len,
+                "refresh_method": refresh_method,
+                "attention_boost": boost,
+                "attention_requested_boost": attention_boost,
+                "attention_effective_boost": boost,
                 "code_entropy": normalized_code_entropy(codes, runtime_bundle.coarse_codewords),
                 "code_max_fraction": mean_code_max_fraction(codes, runtime_bundle.coarse_codewords),
             },
         )
         refreshed[layer_idx] = codebooks.detach().cpu()
-        del key_all, k_low, codebooks, codes
+        del query_all, key_all, k_low, codebooks, codes
         if device.type == "cuda":
             torch.cuda.empty_cache()
 
@@ -125,6 +163,15 @@ def main() -> None:
     parser.add_argument("--calibration-repeats", type=int, default=320)
     parser.add_argument("--calibration-length", type=int, default=32768)
     parser.add_argument("--socket-layers", default="")
+    parser.add_argument(
+        "--refresh-method",
+        choices=["identity_kmeans", "attention_weighted", "attention_weighted_strong"],
+        default="identity_kmeans",
+    )
+    parser.add_argument("--attention-topk", type=int, default=16)
+    parser.add_argument("--calibration-query-samples", type=int, default=128)
+    parser.add_argument("--min-query-pos", type=int, default=128)
+    parser.add_argument("--attention-boost", type=float, default=4.0)
     parser.add_argument("--allow-beyond-model-context", action="store_true")
     parser.add_argument("--kmeans-iters", type=int, default=8)
     parser.add_argument("--assign-chunk-size", type=int, default=8192)
@@ -184,12 +231,18 @@ def main() -> None:
     print(f"calibration_docs,{len(calibration_docs)}", flush=True)
     print(f"calibration_seq_len,{calibration_batch['input_ids'].shape[1]}", flush=True)
     print(f"layers,{format_layer_list(layers)}", flush=True)
+    print(f"refresh_method,{args.refresh_method}", flush=True)
 
     refreshed_codebooks = fit_refreshed_codebooks(
         model=model,
         runtime_bundle=runtime_bundle,
         calibration_batch=calibration_batch,
         layers=layers,
+        refresh_method=args.refresh_method,
+        attention_topk=args.attention_topk,
+        calibration_query_samples=args.calibration_query_samples,
+        min_query_pos=args.min_query_pos,
+        attention_boost=args.attention_boost,
         kmeans_iters=args.kmeans_iters,
         assign_chunk_size=args.assign_chunk_size,
         seed=args.seed,
@@ -214,10 +267,16 @@ def main() -> None:
             "base_profile_name": base_manifest.get("profile_name"),
             "base_artifact_dir": str(args.artifact_dir),
             "context_length": args.calibration_length,
-            "codebook_refresh_method": "calibration_identity_kmeans",
+            "codebook_refresh_method": f"calibration_{args.refresh_method}",
             "codebook_refresh_layers": format_layer_list(layers),
             "codebook_refresh_calibration_doc_count": len(calibration_docs),
             "codebook_refresh_calibration_length": args.calibration_length,
+            "codebook_refresh_attention_topk": args.attention_topk,
+            "codebook_refresh_calibration_query_samples": args.calibration_query_samples,
+            "codebook_refresh_attention_boost": args.attention_boost,
+            "codebook_refresh_attention_effective_boost": attention_boost_for_variant(
+                args.refresh_method, args.attention_boost
+            ),
             "codebook_refresh_kmeans_iters": args.kmeans_iters,
             "codebook_refresh_seed": args.seed,
             "artifact_dtype": args.artifact_dtype,

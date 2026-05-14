@@ -118,11 +118,16 @@ def is_calibration_variant(variant: str) -> bool:
 
 
 def is_attention_weighted_variant(variant: str) -> bool:
-    return variant in {"calib_attention_weighted", "calib_attention_weighted_strong"}
+    return variant in {
+        "calib_attention_weighted",
+        "calib_attention_weighted_strong",
+        "attention_weighted",
+        "attention_weighted_strong",
+    }
 
 
 def attention_boost_for_variant(variant: str, base_boost: float) -> float:
-    if variant == "calib_attention_weighted_strong":
+    if variant in {"calib_attention_weighted_strong", "attention_weighted_strong"}:
         return base_boost * 4.0
     return base_boost
 

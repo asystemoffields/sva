@@ -140,6 +140,8 @@ The first long-context refreshed artifact is now exported at `results/hf_artifac
 
 The first language-facing profile-router test is a useful negative. With the original profile at `8192`, the refreshed profile at `16384/32768`, and the larger `8192/2048` scan policy, passkey answer NLL deltas were `0.070947`, `0.042013`, and `0.138533`. The earlier original-profile scale-out row was slightly better at `16384/32768` (`-0.016004` and `0.116894`), so aggregate recall and entropy gains have not yet converted into passkey language gains. The next profile should be evidence-aware: weight codebook fit toward attention top-k and exact evidence neighborhoods, while recording entropy only as a collapse diagnostic.
 
+Attention-weighted refresh is the first positive evidence-aware catalog result. At `32768`, plain refresh reached teacher top-16 recall `0.635887/0.726002/0.808793` at budgets `512/1024/2048`; strong attention-weighted refresh reached `0.677083/0.762297/0.836887`, also above the identity eval-refit ceiling `0.645526/0.734565/0.816081`. Entropy and score cosine moved down while teacher recall moved up, confirming that the objective is evidence survival, with entropy only a diagnostic. The next step is exporting an all-layer strong attention-weighted profile and rerunning passkey routing.
+
 ## Files
 
 - `experiments/sva_kill_test.py`: standalone toy benchmark.
@@ -294,6 +296,7 @@ The first language-facing profile-router test is a useful negative. With the ori
 - `results/codebook_refresh_snapshot_2026-05-14.md`: held-out calibration-time codebook refresh snapshot.
 - `results/refreshed_profile_snapshot_2026-05-14.md`: exported long-context refreshed artifact and recall sanity snapshot.
 - `results/passkey_profile_router_snapshot_2026-05-14.md`: language-facing passkey test for context-routed SVA profiles.
+- `results/attention_weighted_refresh_snapshot_2026-05-14.md`: held-out attention-weighted refresh benchmark snapshot.
 - `results/hf_artifacts/sva-smollm2-135m-2x256-v1/`: local HF/GitHub-ready `2x256` SVA artifact bundle.
 - `results/hf_artifacts/sva-smollm2-135m-2x256-longctx-refresh-v1/`: local HF/GitHub-ready long-context refreshed `2x256` SVA artifact bundle.
 - `notes/attention_replacement_findings.md`: broader research log leading to SVA.

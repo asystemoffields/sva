@@ -58,6 +58,8 @@ The first refreshed long-context artifact now exists locally at `results/hf_arti
 
 The first profile-routed passkey language test did not convert the recall gain into an answer-NLL gain. With original profile at `8192`, refreshed profile at `16384/32768`, and scan `8192/2048`, answer NLL deltas were `0.070947`, `0.042013`, and `0.138533`. The earlier original-profile scale-out row was slightly better at `16384/32768` (`-0.016004` and `0.116894`). The next refresh should be evidence-aware rather than plain entropy/balance refresh.
 
+Attention-weighted refresh is the first positive evidence-aware catalog result. At `32768`, plain refresh reached teacher top-16 recall `0.635887/0.726002/0.808793` at budgets `512/1024/2048`; strong attention-weighted refresh reached `0.677083/0.762297/0.836887`, above the identity eval-refit ceiling `0.645526/0.734565/0.816081`. Entropy and score cosine moved down while teacher recall moved up, so the objective is evidence survival, with entropy recorded only as a collapse diagnostic.
+
 ## Million-Token Constraint
 
 At a 1,000,000-token context, average prefix length is about 500,000. A usable replacement should keep exact full-dimensional QK scoring in the rough range of 128 to 1024 candidates per query.
@@ -131,6 +133,6 @@ The next architectural test is evidence-aware context-matched serving:
 
 - keep the exact verifier unchanged
 - compare original and refreshed profiles on passkey key survival by layer/head/query
-- fit the next long-context profile with attention/evidence-weighted codebooks
+- export an all-layer strong attention-weighted long-context profile
 - track recall, evidence survival, answer NLL, score distortion, normalized code entropy, max code load, value reads, and wall time
-- rerun the profile-router passkey benchmark only after key survival improves
+- rerun the profile-router passkey benchmark with that profile
