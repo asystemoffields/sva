@@ -160,6 +160,10 @@ The `late4` robustness run held across 9 passkey cases at `32768` using three ke
 
 The direct `early26` pressure check confirms that boundary. At `32768`, replacing layers `0-25` alone produced answer KL `1.531219` and logit cosine `0.745349`, nearly the same distribution drift as replacing all layers (`KL=1.562648`, cosine `0.743596`). Replacing only `26-29` stayed close to full attention (`KL=0.005527`, cosine `0.999898`) and reduced decode wall-clock in this scan harness, while prefill remained slower. The production path is therefore late-layer SVA plus faster summon, while early-layer replacement needs direct long-context/logit-preserving training to be worth reopening.
 
+The late4 budget squeeze shows real headroom. At `32768`, `4096/1024` kept KL to `0.013036` with `32x` fewer decode exact/value reads in the SVA layers, and `2048/512` kept KL to `0.022243` with `64x` fewer reads. Even `512/128` preserved gold-answer NLL on this case, though KL rose to `0.085656`. Decode was faster than full attention for every late4 budget row in this scan harness; prefill remained slower because scan summon still traverses the context. This makes `512/128` or `1024/256` the right fine-tuning target.
+
+The first SVA-active fine-tuning probe is positive. Training `110592` tiny residual-adapter parameters on top of late4 SVA at `512/128` for 24 steps against full-attention final-prompt logits cut held-out 32K KL from `0.045040` to `0.009811`, improved top-1 agreement from `0.666667` to `1.000000`, and raised logit cosine from `0.998986` to `0.999657`. This suggests fine-tuning can recover much of the `8192/2048` distribution closeness while keeping a `256x` decode exact-read reduction in the SVA layers. The next check is full answer-decode evaluation with saved adapters.
+
 ## Files
 
 - `experiments/sva_kill_test.py`: standalone toy benchmark.
@@ -194,6 +198,7 @@ The direct `early26` pressure check confirms that boundary. At `32768`, replacin
 - `experiments/sva_span_statement_benchmark.py`: passkey span-statement benchmark that opens local spans around summoned evidence and compares selected-span output with full attention.
 - `experiments/sva_rotation_diagnostic.py`: low-rank rotation diagnostic that compares frozen product codebooks with refit identity and Hadamard-style codebooks.
 - `experiments/sva_codebook_refresh_benchmark.py`: held-out calibration-time codebook refresh benchmark for context-matched SVA catalogs.
+- `experiments/sva_late4_logit_distill.py`: SVA-active final-logit distillation probe for tight-budget late4 sockets.
 - `experiments/sva_artifact_io.py`: save/load helpers for portable frozen SVA artifact bundles.
 - `experiments/export_sva_artifact.py`: exporter for HF/GitHub-ready SVA artifact folders.
 - `experiments/export_refreshed_sva_artifact.py`: exporter that refreshes artifact coarse codebooks on a calibration stream while preserving the trained low-rank projections.
@@ -238,6 +243,8 @@ The direct `early26` pressure check confirms that boundary. At `32768`, replacin
 - `modal_h100_passkey_late_boundary_language.py`: Modal H100 runner for late-layer passkey answer boundary sweeps.
 - `modal_h100_passkey_late4_robustness.py`: Modal H100 runner for multi-key, multi-placement late4 passkey checks.
 - `modal_h100_passkey_early26_language.py`: Modal H100 runner for directly comparing `0-25`, all-layer, and `26-29` passkey answer drift.
+- `modal_h100_late4_budget_sweep.py`: Modal H100 runner for late4 passkey budget-squeeze sweeps.
+- `modal_h100_late4_logit_distill.py`: Modal H100 runner for tight-budget late4 final-logit distillation.
 - `modal_h100_block_elevator.py`: Modal H100 runner for block-first SVA elevator benchmarking.
 - `modal_h100_block_hybrid.py`: Modal H100 runner for token/block hybrid SVA benchmarking.
 - `modal_h100_learned_hybrid_selector.py`: Modal H100 runner for learned token/block selector benchmarking.
@@ -334,6 +341,8 @@ The direct `early26` pressure check confirms that boundary. At `32768`, replacin
 - `results/passkey_late_boundary_language_snapshot_2026-05-14.md`: late-layer boundary passkey answer sweep.
 - `results/passkey_late4_robustness_snapshot_2026-05-14.md`: multi-key, multi-placement late4 passkey robustness check.
 - `results/passkey_early26_language_snapshot_2026-05-14.md`: direct `0-25` versus all-layer versus `26-29` passkey answer comparison.
+- `results/late4_budget_sweep_snapshot_2026-05-14.md`: late4 32K passkey quality/cost sweep across tighter SVA budgets.
+- `results/late4_logit_distill_snapshot_2026-05-14.md`: first SVA-active tight-budget late4 final-logit distillation result.
 - `results/hf_artifacts/sva-smollm2-135m-2x256-v1/`: local HF/GitHub-ready `2x256` SVA artifact bundle.
 - `results/hf_artifacts/sva-smollm2-135m-2x256-longctx-refresh-v1/`: local HF/GitHub-ready long-context refreshed `2x256` SVA artifact bundle.
 - `results/hf_artifacts/sva-smollm2-135m-2x256-attnweighted-v1/`: local HF/GitHub-ready attention-weighted long-context `2x256` SVA artifact bundle.
