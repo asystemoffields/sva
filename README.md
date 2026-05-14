@@ -140,7 +140,9 @@ The first long-context refreshed artifact is now exported at `results/hf_artifac
 
 The first language-facing profile-router test is a useful negative. With the original profile at `8192`, the refreshed profile at `16384/32768`, and the larger `8192/2048` scan policy, passkey answer NLL deltas were `0.070947`, `0.042013`, and `0.138533`. The earlier original-profile scale-out row was slightly better at `16384/32768` (`-0.016004` and `0.116894`), so aggregate recall and entropy gains have not yet converted into passkey language gains. The next profile should be evidence-aware: weight codebook fit toward attention top-k and exact evidence neighborhoods, while recording entropy only as a collapse diagnostic.
 
-Attention-weighted refresh is the first positive evidence-aware catalog result. At `32768`, plain refresh reached teacher top-16 recall `0.635887/0.726002/0.808793` at budgets `512/1024/2048`; strong attention-weighted refresh reached `0.677083/0.762297/0.836887`, also above the identity eval-refit ceiling `0.645526/0.734565/0.816081`. Entropy and score cosine moved down while teacher recall moved up, confirming that the objective is evidence survival, with entropy only a diagnostic. The next step is exporting an all-layer strong attention-weighted profile and rerunning passkey routing.
+Attention-weighted refresh is the first positive evidence-aware catalog result. At `32768`, plain refresh reached teacher top-16 recall `0.635887/0.726002/0.808793` at budgets `512/1024/2048`; strong attention-weighted refresh reached `0.677083/0.762297/0.836887`, also above the identity eval-refit ceiling `0.645526/0.734565/0.816081`. Entropy and score cosine moved down while teacher recall moved up, confirming that the objective is evidence survival, with entropy only a diagnostic.
+
+The language-facing attention-weighted profile router gives a mixed result. With original profile at `8192`, strong attention-weighted profile at `16384/32768`, and scan `8192/2048`, passkey answer NLL deltas were `0.070947`, `0.024752`, and `0.152243`. This improves over the plain refreshed profile at `16384` (`0.042013` to `0.024752`) but regresses at `32768` (`0.138533` to `0.152243`). The next sharp move is a mixed-strength evidence-aware profile sweep: keep the evidence objective, reduce the blunt all-layer strong weighting, and record key survival beside answer NLL.
 
 ## Files
 
@@ -201,6 +203,7 @@ Attention-weighted refresh is the first positive evidence-aware catalog result. 
 - `modal_h100_compact_summon_frontier.py`: Modal H100 runner for compact coarse-code quality/speed frontier sweeps.
 - `modal_h100_export_sva_artifact.py`: Modal H100 runner that exports the default `2x256` SVA artifact bundle to a Modal volume.
 - `modal_h100_export_refreshed_artifact.py`: Modal H100 runner that exports a long-context calibration-refreshed artifact bundle.
+- `modal_h100_export_attention_weighted_artifact.py`: Modal H100 runner that exports an attention-weighted long-context artifact bundle.
 - `modal_h100_8k_head_to_head.py`: Modal H100 runner for the 8k head-to-head deployment benchmark.
 - `modal_h100_inverted_adaptive_decode.py`: Modal H100 runner for adaptive inverted-code decode benchmarking.
 - `modal_h100_inverted_posting_decode.py`: Modal H100 runner for cached posting-list decode benchmarking.
@@ -210,6 +213,7 @@ Attention-weighted refresh is the first positive evidence-aware catalog result. 
 - `modal_h100_passkey_language_scan.py`: Modal H100 runner for fixed-scan passkey language benchmarking.
 - `modal_h100_passkey_language_scaleout.py`: Modal H100 runner for passkey shortlist and budget scale-out.
 - `modal_h100_passkey_profile_router.py`: Modal H100 runner for passkey language tests with context-routed SVA profiles.
+- `modal_h100_passkey_attention_weighted_router.py`: Modal H100 runner for passkey language tests with the attention-weighted long-context profile.
 - `modal_h100_block_elevator.py`: Modal H100 runner for block-first SVA elevator benchmarking.
 - `modal_h100_block_hybrid.py`: Modal H100 runner for token/block hybrid SVA benchmarking.
 - `modal_h100_learned_hybrid_selector.py`: Modal H100 runner for learned token/block selector benchmarking.
@@ -297,8 +301,10 @@ Attention-weighted refresh is the first positive evidence-aware catalog result. 
 - `results/refreshed_profile_snapshot_2026-05-14.md`: exported long-context refreshed artifact and recall sanity snapshot.
 - `results/passkey_profile_router_snapshot_2026-05-14.md`: language-facing passkey test for context-routed SVA profiles.
 - `results/attention_weighted_refresh_snapshot_2026-05-14.md`: held-out attention-weighted refresh benchmark snapshot.
+- `results/passkey_attention_weighted_router_snapshot_2026-05-14.md`: language-facing passkey test for the attention-weighted routed profile.
 - `results/hf_artifacts/sva-smollm2-135m-2x256-v1/`: local HF/GitHub-ready `2x256` SVA artifact bundle.
 - `results/hf_artifacts/sva-smollm2-135m-2x256-longctx-refresh-v1/`: local HF/GitHub-ready long-context refreshed `2x256` SVA artifact bundle.
+- `results/hf_artifacts/sva-smollm2-135m-2x256-attnweighted-v1/`: local HF/GitHub-ready attention-weighted long-context `2x256` SVA artifact bundle.
 - `notes/attention_replacement_findings.md`: broader research log leading to SVA.
 - `notes/hierarchical_tree_sva.md`: side-track notes for hierarchical chunk/tree SVA.
 - `notes/million_token_scaling.md`: scaling target for million-token contexts.
@@ -357,6 +363,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_bac
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-codebook-refresh -ModalFile modal_h100_codebook_refresh.py
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-attention-weighted-refresh -ModalFile modal_h100_attention_weighted_refresh.py
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-refreshed-profile-recall -ModalFile modal_h100_refreshed_profile_recall.py
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-export-attnweighted-artifact -ModalFile modal_h100_export_attention_weighted_artifact.py
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-passkey-attnweighted-router -ModalFile modal_h100_passkey_attention_weighted_router.py
 ```
 
 The launcher uses `modal run --detach` and writes local metadata, stdout, stderr, and result files under `results/modal_runs/`.

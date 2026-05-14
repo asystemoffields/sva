@@ -60,6 +60,8 @@ The first profile-routed passkey language test did not convert the recall gain i
 
 Attention-weighted refresh is the first positive evidence-aware catalog result. At `32768`, plain refresh reached teacher top-16 recall `0.635887/0.726002/0.808793` at budgets `512/1024/2048`; strong attention-weighted refresh reached `0.677083/0.762297/0.836887`, above the identity eval-refit ceiling `0.645526/0.734565/0.816081`. Entropy and score cosine moved down while teacher recall moved up, so the objective is evidence survival, with entropy recorded only as a collapse diagnostic.
 
+The first language-facing attention-weighted profile router partially transfers that proxy gain. With original profile at `8192`, strong attention-weighted profile at `16384/32768`, and scan `8192/2048`, answer NLL deltas were `0.070947`, `0.024752`, and `0.152243`. This beats the plain refreshed routed profile at `16384` (`0.042013` to `0.024752`) and loses ground at `32768` (`0.138533` to `0.152243`). Evidence weighting is useful, but a single all-layer strong profile is brittle at the longest tested context.
+
 ## Million-Token Constraint
 
 At a 1,000,000-token context, average prefix length is about 500,000. A usable replacement should keep exact full-dimensional QK scoring in the rough range of 128 to 1024 candidates per query.
@@ -129,10 +131,11 @@ The important refinement is distribution matching. High code entropy can coincid
 
 ## Next Verification Step
 
-The next architectural test is evidence-aware context-matched serving:
+The next architectural test is mixed-strength evidence-aware serving:
 
 - keep the exact verifier unchanged
-- compare original and refreshed profiles on passkey key survival by layer/head/query
-- export an all-layer strong attention-weighted long-context profile
+- sweep attention-weighted boosts `1/2/4` and strong boost only where it survives language-facing tests
+- compare key survival by layer/head/query against answer NLL
+- route profiles by context length and possibly layer group
 - track recall, evidence survival, answer NLL, score distortion, normalized code entropy, max code load, value reads, and wall time
-- rerun the profile-router passkey benchmark with that profile
+- keep replacing scan prefill with indexed/elevator summon
