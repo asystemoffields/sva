@@ -86,6 +86,8 @@ The combined test stacked those gains. Training the supervised rank-64 coarse sc
 
 The tight-shortlist pressure test set the current practical band. Weighted supervised `4x64` reached `0.776445` at shortlist `1024`, `0.757239` at `768`, and `0.713759` at `512`. The method still improves over unweighted and unsupervised coarse PQ at each point, but the drop below `1024` is steep. The next target is a shortlist-aware coarse objective that trains for top-key survival at `512-1024` directly.
 
+Hard-negative coarse training directly attacked that shortlist-survival objective. After `80` hard-negative steps mined from a `1024` candidate pool, weighted hard-supervised `4x64` reached `0.826187` at shortlist `512`, `0.829861` at `768`, and `0.832217` at `1024`, close to the exact learned-ranker ceiling of `0.839332`. This is the strongest current mainline result.
+
 ## Files
 
 - `experiments/sva_kill_test.py`: standalone toy benchmark.
@@ -125,6 +127,7 @@ The tight-shortlist pressure test set the current practical band. Weighted super
 - `modal_h100_weighted_supervised_coarse_pq.py`: Modal H100 runner for attention-weighted codebooks in a supervised coarse space.
 - `modal_h100_weighted_supervised_coarse_pq_tight.py`: Modal H100 runner for tight-shortlist weighted supervised coarse PQ.
 - `modal_h100_hard_supervised_coarse_pq.py`: Modal H100 runner for hard-negative supervised coarse PQ.
+- `modal_h100_hard_pool_sweep.py`: Modal H100 runner for hard-negative pool-size sweep.
 - `scripts/start_modal_h100_background.ps1`: detached Modal launcher that writes run logs under `results/modal_runs/`.
 - `results/verification_snapshot_2026-05-13.md`: current kill-test results.
 - `results/trainable_recall_snapshot_2026-05-13.md`: H100 trainable-representation checkpoint.
@@ -149,7 +152,9 @@ The tight-shortlist pressure test set the current practical band. Weighted super
 - `results/weighted_coarse_pq_snapshot_2026-05-13.md`: attention-weighted coarse PQ codebook snapshot.
 - `results/weighted_supervised_coarse_pq_snapshot_2026-05-13.md`: weighted codebooks in supervised coarse space snapshot.
 - `results/weighted_supervised_coarse_pq_tight_snapshot_2026-05-13.md`: tight-shortlist weighted supervised coarse PQ snapshot.
+- `results/hard_supervised_coarse_pq_snapshot_2026-05-13.md`: hard-negative supervised coarse PQ snapshot.
 - `notes/attention_replacement_findings.md`: broader research log leading to SVA.
+- `notes/hierarchical_tree_sva.md`: side-track notes for hierarchical chunk/tree SVA.
 - `notes/million_token_scaling.md`: scaling target for million-token contexts.
 
 ## H100 Run
@@ -175,6 +180,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_bac
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-weighted-supervised-coarse-pq -ModalFile modal_h100_weighted_supervised_coarse_pq.py
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-weighted-supervised-coarse-pq-tight -ModalFile modal_h100_weighted_supervised_coarse_pq_tight.py
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-hard-supervised-coarse-pq -ModalFile modal_h100_hard_supervised_coarse_pq.py
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-hard-pool-sweep -ModalFile modal_h100_hard_pool_sweep.py
 ```
 
 The launcher uses `modal run --detach` and writes local metadata, stdout, stderr, and result files under `results/modal_runs/`.
