@@ -126,7 +126,7 @@ The first token/block hybrid run found complementarity. With the same `2048` ave
 
 The learned selector is positive on held-out synthetic layer outputs. A tiny MLP trained on cheap pre-verifier features reached `train_accuracy=0.943673` and transferred to a different held-out document. At `131072`, learned `128 x 16` improved relative error from token SVA's `0.570985` and block-only `0.250723` to `0.179351`, with about `599` average contiguous/scattered segments instead of `2048` scattered token segments. At `32768`, learned `128 x 16` reached `relative_error=0.106382`, close to the oracle's `0.096472`. The next sharp test is language-facing: socket this dispatcher into the passkey benchmark and see whether it preserves exact retrieval while improving long-context diffuse output.
 
-The evidence-haystack benchmark is staged to measure summon quality directly. It builds passkey prompts with known evidence positions, compares full-attention teacher evidence use against SVA candidate survival, and tests whether multi-anchor query probes help the right evidence survive as the context grows. This separates teacher usage, summoner recall, and final verifier retention.
+The evidence-haystack benchmark now measures summon quality directly. Multi-anchor summon improves evidence survival: at `8192` start placement, full-budget anchors lift summoned key survival from `0.592593` with one anchor to `0.962963` with eight anchors, and at `32768` end placement from `0.222222` to `0.777778` with sixteen anchors. The next bottleneck is verifier rerank: at `32768` end placement the key is summoned in `0.777778` of head/layer cases but survives final verification in `0.444444`. Split-budget anchors are useful when evidence is close to the query: `8192` end placement kept exact key survival at `1.000000` while verifying about `435` tokens, an `18.8x` read reduction.
 
 ## Files
 
@@ -263,6 +263,7 @@ The evidence-haystack benchmark is staged to measure summon quality directly. It
 - `results/block_elevator_snapshot_2026-05-14.md`: block-first SVA elevator and local statement benchmark snapshot.
 - `results/block_hybrid_snapshot_2026-05-14.md`: token/block hybrid selector benchmark snapshot.
 - `results/learned_hybrid_selector_snapshot_2026-05-14.md`: learned token/block selector benchmark snapshot.
+- `results/evidence_haystack_snapshot_2026-05-14.md`: passkey evidence survival benchmark snapshot.
 - `results/hf_artifacts/sva-smollm2-135m-2x256-v1/`: local HF/GitHub-ready `2x256` SVA artifact bundle.
 - `notes/attention_replacement_findings.md`: broader research log leading to SVA.
 - `notes/hierarchical_tree_sva.md`: side-track notes for hierarchical chunk/tree SVA.
