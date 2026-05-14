@@ -2,6 +2,9 @@
 
 This keeps the strong fine `16x256` PQ scorer from the coarse-to-fine test,
 then trains a separate cheap coarse scorer to summon the fine-PQ winners.
+It can also fit attention-weighted coarse codebooks directly in the fine
+ranker space, testing whether the coarse catalog should be optimized for
+candidate survival instead of learned as a separate scorer.
 """
 
 from __future__ import annotations
@@ -15,7 +18,7 @@ import torch
 from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
 
 from sva_coarse_to_fine_pq_test import parse_pq_configs
-from sva_learned_ivf_lookup_test import learned_scores, project_keys, project_queries
+from sva_learned_ivf_lookup_test import assign_to_centroids, learned_scores, project_keys, project_queries
 from sva_learned_ranker_test import (
     LowRankRanker,
     layer_qk,
@@ -43,9 +46,89 @@ from sva_real_qk_address_sweep import (
 AggregateKey = tuple[str, int, int, int, int, int, int, int, int]
 
 
+def comma_floats(value: str) -> list[float]:
+    if not value:
+        return []
+    return [float(part.strip()) for part in value.split(",") if part.strip()]
+
+
+def boost_label(value: float) -> str:
+    return f"{value:g}".replace("-", "m").replace(".", "p")
+
+
 def candidate_counts(eval_positions: np.ndarray, n_heads: int, budget: int) -> list[int]:
     counts = np.minimum(eval_positions + 1, budget).astype(np.int64)
     return np.tile(counts[None, :], (n_heads, 1)).reshape(-1).tolist()
+
+
+@torch.no_grad()
+def key_label_weights(
+    label_idx: np.ndarray,
+    label_valid: np.ndarray,
+    seq_len: int,
+    boost: float,
+    device: torch.device,
+) -> torch.Tensor:
+    n_heads = label_idx.shape[0]
+    weights = torch.ones(n_heads, seq_len, device=device, dtype=torch.float32)
+    for head_idx in range(n_heads):
+        valid_idx = label_idx[head_idx][label_valid[head_idx]]
+        if valid_idx.size == 0:
+            continue
+        idx = torch.tensor(valid_idx.reshape(-1), device=device, dtype=torch.long).clamp(0, seq_len - 1)
+        weights[head_idx].index_add_(0, idx, torch.full_like(idx, float(boost), dtype=torch.float32))
+    return weights
+
+
+@torch.no_grad()
+def fit_weighted_product_codebooks(
+    k_low: torch.Tensor,
+    weights: torch.Tensor,
+    subspaces: int,
+    codewords: int,
+    iterations: int,
+    seed: int,
+    chunk_size: int,
+) -> torch.Tensor:
+    n_heads, seq_len, rank_dim = k_low.shape
+    if rank_dim % subspaces != 0:
+        raise ValueError(f"rank_dim={rank_dim} must be divisible by subspaces={subspaces}")
+    if weights.shape != (n_heads, seq_len):
+        raise ValueError("Weight shape must match key heads and sequence length.")
+
+    sub_dim = rank_dim // subspaces
+    actual_codewords = min(codewords, seq_len)
+    codebooks: list[torch.Tensor] = []
+
+    for head_idx in range(n_heads):
+        head_codebooks: list[torch.Tensor] = []
+        head_weights = weights[head_idx].float().clamp_min(1e-6)
+        probs = head_weights / head_weights.sum().clamp_min(1e-6)
+        for subspace_idx in range(subspaces):
+            start = subspace_idx * sub_dim
+            end = start + sub_dim
+            x = k_low[head_idx, :, start:end].float()
+            generator = torch.Generator(device=x.device)
+            generator.manual_seed(seed + head_idx * 9973 + subspace_idx * 131 + actual_codewords)
+            initial = torch.multinomial(probs, actual_codewords, replacement=False, generator=generator)
+            centroids = x[initial].clone()
+
+            for _ in range(iterations):
+                labels = assign_to_centroids(x, centroids, chunk_size)
+                sums = torch.zeros(actual_codewords, sub_dim, device=x.device, dtype=torch.float32)
+                weighted_x = x * head_weights[:, None]
+                sums.index_add_(0, labels, weighted_x)
+                counts = torch.zeros(actual_codewords, device=x.device, dtype=torch.float32)
+                counts.index_add_(0, labels, head_weights)
+                nonempty = counts > 0
+                next_centroids = centroids.clone()
+                next_centroids[nonempty] = sums[nonempty] / counts[nonempty, None]
+                centroids = next_centroids
+
+            head_codebooks.append(centroids.to(k_low.dtype))
+        codebooks.append(torch.stack(head_codebooks, dim=0))
+
+    return torch.stack(codebooks, dim=0)
 
 
 @torch.no_grad()
@@ -288,6 +371,7 @@ def main() -> None:
     parser.add_argument("--coarse-rank-dims", default="16,32,64")
     parser.add_argument("--coarse-label-topk", type=int, default=512)
     parser.add_argument("--coarse-label-source", choices=["fine_pq", "attention"], default="fine_pq")
+    parser.add_argument("--weighted-coarse-boosts", default="")
     parser.add_argument("--coarse-configs", default="4x16,4x64,8x16")
     parser.add_argument("--fine-configs", default="16x256")
     parser.add_argument("--shortlists", default="1024,2048,4096")
@@ -354,6 +438,7 @@ def main() -> None:
     coarse_rank_dims = comma_ints(args.coarse_rank_dims)
     coarse_configs = parse_pq_configs(args.coarse_configs)
     fine_configs = parse_pq_configs(args.fine_configs)
+    weighted_coarse_boosts = comma_floats(args.weighted_coarse_boosts)
     shortlists = comma_ints(args.shortlists)
     budgets = comma_ints(args.budgets)
     train_positions = sample_query_positions(
@@ -384,6 +469,7 @@ def main() -> None:
     print(f"coarse_rank_dims,{';'.join(str(value) for value in coarse_rank_dims)}")
     print(f"coarse_label_topk,{args.coarse_label_topk}")
     print(f"coarse_label_source,{args.coarse_label_source}")
+    print(f"weighted_coarse_boosts,{';'.join(f'{value:g}' for value in weighted_coarse_boosts)}")
     print(f"coarse_configs,{';'.join(f'{a}x{b}' for a, b in coarse_configs)}")
     print(f"fine_configs,{';'.join(f'{a}x{b}' for a, b in fine_configs)}")
     print(f"shortlists,{';'.join(str(value) for value in shortlists)}")
@@ -639,6 +725,81 @@ def main() -> None:
                 raise RuntimeError("Fine-PQ labels were not built.")
             coarse_label_idx = train_fine_label_idx
             coarse_label_valid = train_fine_label_valid
+
+        if weighted_coarse_boosts:
+            for boost in weighted_coarse_boosts:
+                weights = key_label_weights(
+                    coarse_label_idx,
+                    coarse_label_valid,
+                    train_seq_len,
+                    boost,
+                    device,
+                )
+                for coarse_subspaces, coarse_codewords in coarse_configs:
+                    if args.fine_rank_dim % coarse_subspaces != 0:
+                        continue
+                    weighted_codebooks = fit_weighted_product_codebooks(
+                        train_fine_k_low,
+                        weights,
+                        coarse_subspaces,
+                        coarse_codewords,
+                        args.kmeans_iters,
+                        args.seed
+                        + layer_idx * 1000
+                        + int(boost * 1000)
+                        + coarse_subspaces * 101
+                        + coarse_codewords,
+                        args.assign_chunk_size,
+                    )
+                    weighted_codes = encode_product_keys(eval_fine_k_low, weighted_codebooks, args.assign_chunk_size)
+                    weighted_scores = product_quantized_scores(
+                        eval_fine_q_low,
+                        weighted_codebooks,
+                        weighted_codes,
+                        args.fine_rank_dim,
+                    )
+                    actual_coarse_codewords = int(weighted_codebooks.shape[2])
+                    print(
+                        "progress,weighted_coarse_pq_ready,"
+                        f"{layer_idx},{boost:g},{coarse_subspaces},{actual_coarse_codewords}",
+                        flush=True,
+                    )
+                    for (fine_subspaces, fine_codewords), fine_scores in fine_score_cache.items():
+                        for shortlist in shortlists:
+                            for budget in budgets:
+                                if shortlist < budget:
+                                    continue
+                                evaluate_stage(
+                                    f"weighted_coarse_to_fine_b{boost_label(boost)}",
+                                    layer_idx,
+                                    eval_seq_len,
+                                    args.fine_rank_dim,
+                                    args.fine_rank_dim,
+                                    args.coarse_label_topk,
+                                    coarse_subspaces,
+                                    actual_coarse_codewords,
+                                    fine_subspaces,
+                                    fine_codewords,
+                                    shortlist,
+                                    budget,
+                                    args.kmeans_iters,
+                                    args.fine_train_steps,
+                                    0,
+                                    fine_loss,
+                                    float("nan"),
+                                    weighted_scores,
+                                    fine_scores,
+                                    eval_positions,
+                                    eval_top_idx,
+                                    eval_top_valid,
+                                    aggregate,
+                                )
+                    del weighted_codebooks, weighted_codes, weighted_scores
+                    if device.type == "cuda":
+                        torch.cuda.empty_cache()
+                del weights
+                if device.type == "cuda":
+                    torch.cuda.empty_cache()
 
         for coarse_rank_dim in coarse_rank_dims:
             torch.manual_seed(args.seed + layer_idx * 2000 + coarse_rank_dim)
