@@ -84,6 +84,8 @@ Attention-weighted coarse codebooks tested that next branch. Fitting the coarse 
 
 The combined test stacked those gains. Training the supervised rank-64 coarse scorer and then fitting attention-weighted `4x64` codebooks inside that coarse space reached `0.803184` at shortlist `4096`, `0.799882` at shortlist `2048`, and `0.776445` at shortlist `1024`. This is the current best serving candidate for the learned-ranker branch. The next pressure test is shorter shortlists, especially `512` and `768`, with the same verifier budget.
 
+The tight-shortlist pressure test set the current practical band. Weighted supervised `4x64` reached `0.776445` at shortlist `1024`, `0.757239` at `768`, and `0.713759` at `512`. The method still improves over unweighted and unsupervised coarse PQ at each point, but the drop below `1024` is steep. The next target is a shortlist-aware coarse objective that trains for top-key survival at `512-1024` directly.
+
 ## Files
 
 - `experiments/sva_kill_test.py`: standalone toy benchmark.
@@ -145,6 +147,7 @@ The combined test stacked those gains. Training the supervised rank-64 coarse sc
 - `results/supervised_coarse_pq_attention16_snapshot_2026-05-13.md`: supervised coarse PQ with attention top-16 labels snapshot.
 - `results/weighted_coarse_pq_snapshot_2026-05-13.md`: attention-weighted coarse PQ codebook snapshot.
 - `results/weighted_supervised_coarse_pq_snapshot_2026-05-13.md`: weighted codebooks in supervised coarse space snapshot.
+- `results/weighted_supervised_coarse_pq_tight_snapshot_2026-05-13.md`: tight-shortlist weighted supervised coarse PQ snapshot.
 - `notes/attention_replacement_findings.md`: broader research log leading to SVA.
 - `notes/million_token_scaling.md`: scaling target for million-token contexts.
 
