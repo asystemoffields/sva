@@ -122,7 +122,7 @@ The first language-level passkey benchmark is a sharper stress test. With the pa
 
 The first block-elevator benchmark tested a more kernel-shaped SVA path: summon contiguous blocks, then let selected blocks compute exact local softmax partials where they sit. Averaged over layers `0`, `15`, and `29`, token SVA with `2048` individual value reads fell to `output_cosine=0.943327` and `relative_error=0.456380` at `131072` synthetic tokens. Centroid block SVA with the same `2048` value reads reached `output_cosine=0.966790` and `relative_error=0.276183`, while reducing scattered segments from `2048` tokens to `32` contiguous blocks. At `8192`, token SVA remains stronger; at longer contexts, block statements look like a useful way to preserve diffuse value output.
 
-The next target is a hybrid serving-shaped passkey benchmark: preserve the `8192/2048` exact-string quality while testing when token SVA should hand off to block elevator SVA. In parallel, the method target is a richer catalog: multi-scale codes, layer-aware budgets, shortlist objectives trained for exact-token survival, and confidence features that choose token or block mode per layer, head, query, and context length.
+The first token/block hybrid run found complementarity. With the same `2048` average value reads at `131072`, token SVA reached `output_cosine=0.944623` and `relative_error=0.457266`; block `64 x 32` reached `0.969223` and `0.270862`; an oracle selector between token and block reached `0.986559` and `0.165284` while reducing scattered segments from `2048` to about `853`. A cheap entropy selector improved exact-key survival over block-only but left much of the oracle gap open. The next target is a learned selector, then a hybrid serving-shaped passkey benchmark.
 
 ## Files
 
@@ -253,6 +253,7 @@ The next target is a hybrid serving-shaped passkey benchmark: preserve the `8192
 - `results/long_context_extension_snapshot_2026-05-14.md`: 8k head-to-head plus 128k/1M long-context recall extension snapshot.
 - `results/passkey_language_snapshot_2026-05-14.md`: first passkey-style language stress test for SVA decode policy.
 - `results/block_elevator_snapshot_2026-05-14.md`: block-first SVA elevator and local statement benchmark snapshot.
+- `results/block_hybrid_snapshot_2026-05-14.md`: token/block hybrid selector benchmark snapshot.
 - `results/hf_artifacts/sva-smollm2-135m-2x256-v1/`: local HF/GitHub-ready `2x256` SVA artifact bundle.
 - `notes/attention_replacement_findings.md`: broader research log leading to SVA.
 - `notes/hierarchical_tree_sva.md`: side-track notes for hierarchical chunk/tree SVA.
