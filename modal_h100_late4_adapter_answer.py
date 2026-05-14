@@ -1,11 +1,11 @@
-"""Modal H100 runner for tight-budget late4 logit distillation."""
+"""Modal H100 runner for full answer-decode validation of a saved late4 SVA adapter."""
 
 from __future__ import annotations
 
 import modal
 
 
-app = modal.App("sva-late4-logit-distill-h100")
+app = modal.App("sva-late4-adapter-answer-h100")
 volume = modal.Volume.from_name("sva-artifacts", create_if_missing=True)
 
 image = (
@@ -20,44 +20,14 @@ image = (
 REMOTE_ADAPTER_DIR = "/artifacts/sva-late4-512x128-adapter-v1"
 
 ARGS = [
-    "--model-id",
-    "HuggingFaceTB/SmolLM2-135M-Instruct",
-    "--artifact-dir",
-    "results/hf_artifacts/sva-smollm2-135m-2x256-attnweighted-v1",
+    "--adapter-dir",
+    REMOTE_ADAPTER_DIR,
     "--contexts",
     "32768",
-    "--train-keys",
-    "731942,184029",
-    "--eval-keys",
-    "905317",
-    "--train-placements",
-    "start,middle",
-    "--eval-placements",
+    "--keys",
+    "731942,184207,905613",
+    "--placements",
     "start,middle,end",
-    "--socket-layers",
-    "26-29",
-    "--shortlist",
-    "512",
-    "--budget",
-    "128",
-    "--query-chunk-size",
-    "128",
-    "--summon-mode",
-    "scan",
-    "--adapter-rank",
-    "16",
-    "--distill-steps",
-    "24",
-    "--lr",
-    "0.001",
-    "--temperature",
-    "1.0",
-    "--grad-clip",
-    "1.0",
-    "--log-every",
-    "4",
-    "--output-dir",
-    REMOTE_ADAPTER_DIR,
     "--attn-implementation",
     "sdpa",
     "--device",
@@ -68,14 +38,14 @@ ARGS = [
 
 
 @app.function(image=image, gpu="H100", timeout=120 * 60, volumes={"/artifacts": volume})
-def run_late4_logit_distill() -> str:
+def run_late4_adapter_answer() -> str:
     import os
     import subprocess
     import sys
 
     os.chdir("/root/sva")
-    cmd = [sys.executable, "-u", "experiments/sva_late4_logit_distill.py", *ARGS]
-    print("late4_logit_distill_h100_start", flush=True)
+    cmd = [sys.executable, "-u", "experiments/sva_late4_adapter_answer_benchmark.py", *ARGS]
+    print("late4_adapter_answer_h100_start", flush=True)
     print("command," + " ".join(cmd), flush=True)
     process = subprocess.Popen(
         cmd,
@@ -91,19 +61,16 @@ def run_late4_logit_distill() -> str:
             print(line, end="", flush=True)
             lines.append(line)
     return_code = process.wait()
-    print(f"late4_logit_distill_h100_exit,{return_code}", flush=True)
+    print(f"late4_adapter_answer_h100_exit,{return_code}", flush=True)
     if return_code != 0:
-        raise RuntimeError(f"Late4 logit distillation failed with exit code {return_code}")
-    volume.commit()
-    print(f"late4_adapter_remote_dir,{REMOTE_ADAPTER_DIR}", flush=True)
+        raise RuntimeError(f"Late4 adapter answer benchmark failed with exit code {return_code}")
     return "".join(lines)
 
 
 @app.local_entrypoint()
 def main() -> str:
-    call = run_late4_logit_distill.spawn()
+    call = run_late4_adapter_answer.spawn()
     print(f"function_call_id,{call.object_id}")
     print(f"dashboard,{call.get_dashboard_url()}")
     print(f"remote_adapter_dir,{REMOTE_ADAPTER_DIR}")
-    print("download_command,modal volume get sva-artifacts /sva-late4-512x128-adapter-v1 results/hf_artifacts")
     return call.object_id

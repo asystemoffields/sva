@@ -1,0 +1,153 @@
+{
+  "format": "sva_residual_output_adapter_v1",
+  "model_id": "HuggingFaceTB/SmolLM2-135M-Instruct",
+  "artifact_dir": "results/hf_artifacts/sva-smollm2-135m-2x256-attnweighted-v1",
+  "socket_layers": [
+    26,
+    27,
+    28,
+    29
+  ],
+  "shortlist": 512,
+  "budget": 128,
+  "query_chunk_size": 128,
+  "summon_mode": "scan",
+  "adapter_rank": 16,
+  "adapter_scale": 1.0,
+  "distill_steps": 24,
+  "lr": 0.001,
+  "temperature": 1.0,
+  "train_contexts": "32768",
+  "train_keys": "731942,184029",
+  "eval_keys": "905317",
+  "train_placements": "start,middle",
+  "eval_placements": "start,middle,end",
+  "results": [
+    {
+      "phase": "baseline_train",
+      "context": 32768,
+      "key": "731942",
+      "placement": "start",
+      "final_kl_to_full": 0.07202015817165375,
+      "final_top1_agreement": 1.0,
+      "final_logit_cosine": 0.9985717535018921
+    },
+    {
+      "phase": "baseline_train",
+      "context": 32768,
+      "key": "731942",
+      "placement": "middle",
+      "final_kl_to_full": 0.043973930180072784,
+      "final_top1_agreement": 1.0,
+      "final_logit_cosine": 0.9995714426040649
+    },
+    {
+      "phase": "baseline_train",
+      "context": 32768,
+      "key": "184029",
+      "placement": "start",
+      "final_kl_to_full": 0.07457900047302246,
+      "final_top1_agreement": 1.0,
+      "final_logit_cosine": 0.9988316297531128
+    },
+    {
+      "phase": "baseline_train",
+      "context": 32768,
+      "key": "184029",
+      "placement": "middle",
+      "final_kl_to_full": 0.04943068325519562,
+      "final_top1_agreement": 1.0,
+      "final_logit_cosine": 0.9990119934082031
+    },
+    {
+      "phase": "baseline_eval",
+      "context": 32768,
+      "key": "905317",
+      "placement": "start",
+      "final_kl_to_full": 0.07819920778274536,
+      "final_top1_agreement": 1.0,
+      "final_logit_cosine": 0.9983954429626465
+    },
+    {
+      "phase": "baseline_eval",
+      "context": 32768,
+      "key": "905317",
+      "placement": "middle",
+      "final_kl_to_full": 0.05280575156211853,
+      "final_top1_agreement": 0.0,
+      "final_logit_cosine": 0.9991644620895386
+    },
+    {
+      "phase": "baseline_eval",
+      "context": 32768,
+      "key": "905317",
+      "placement": "end",
+      "final_kl_to_full": 0.0041150860488414764,
+      "final_top1_agreement": 1.0,
+      "final_logit_cosine": 0.9993978142738342
+    },
+    {
+      "phase": "distilled_train",
+      "context": 32768,
+      "key": "731942",
+      "placement": "start",
+      "final_kl_to_full": 0.013051113113760948,
+      "final_top1_agreement": 1.0,
+      "final_logit_cosine": 0.9995284080505371
+    },
+    {
+      "phase": "distilled_train",
+      "context": 32768,
+      "key": "731942",
+      "placement": "middle",
+      "final_kl_to_full": 0.007621758617460728,
+      "final_top1_agreement": 1.0,
+      "final_logit_cosine": 0.9999098777770996
+    },
+    {
+      "phase": "distilled_train",
+      "context": 32768,
+      "key": "184029",
+      "placement": "start",
+      "final_kl_to_full": 0.015067094936966896,
+      "final_top1_agreement": 1.0,
+      "final_logit_cosine": 0.9995531439781189
+    },
+    {
+      "phase": "distilled_train",
+      "context": 32768,
+      "key": "184029",
+      "placement": "middle",
+      "final_kl_to_full": 0.009900789707899094,
+      "final_top1_agreement": 1.0,
+      "final_logit_cosine": 0.999862015247345
+    },
+    {
+      "phase": "distilled_eval",
+      "context": 32768,
+      "key": "905317",
+      "placement": "start",
+      "final_kl_to_full": 0.014877596870064735,
+      "final_top1_agreement": 1.0,
+      "final_logit_cosine": 0.9994837045669556
+    },
+    {
+      "phase": "distilled_eval",
+      "context": 32768,
+      "key": "905317",
+      "placement": "middle",
+      "final_kl_to_full": 0.00869950745254755,
+      "final_top1_agreement": 1.0,
+      "final_logit_cosine": 0.9999120831489563
+    },
+    {
+      "phase": "distilled_eval",
+      "context": 32768,
+      "key": "905317",
+      "placement": "end",
+      "final_kl_to_full": 0.0041663674637675285,
+      "final_top1_agreement": 1.0,
+      "final_logit_cosine": 0.9997395277023315
+    }
+  ]
+}

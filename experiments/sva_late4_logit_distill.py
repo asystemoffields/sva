@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import argparse
+import json
 import math
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import torch
 from torch import nn
@@ -27,6 +29,7 @@ class CachedPrompt:
     key: str
     placement: str
     context: int
+    target: str
     case: PromptCase
     teacher_logits: torch.Tensor
 
@@ -86,6 +89,36 @@ def distill_kl(teacher_logits: torch.Tensor, student_logits: torch.Tensor, tempe
     return F.kl_div(student_log_probs, teacher_probs, reduction="batchmean") * (temperature * temperature)
 
 
+def run_logits_for_target(model: nn.Module, case: PromptCase, target: str) -> torch.Tensor:
+    if target == "final":
+        output = model(
+            input_ids=case.input_ids,
+            attention_mask=case.attention_mask,
+            use_cache=False,
+        )
+        logits = output.logits[:, -1, :]
+        del output
+        return logits
+    if target == "answer":
+        if int(case.answer_ids.numel()) > 1:
+            answer_prefix = case.answer_ids[:-1].view(1, -1)
+            input_ids = torch.cat([case.input_ids, answer_prefix], dim=1)
+            attention_mask = torch.ones_like(input_ids)
+        else:
+            input_ids = case.input_ids
+            attention_mask = case.attention_mask
+        output = model(input_ids=input_ids, attention_mask=attention_mask, use_cache=False)
+        positions = torch.arange(
+            case.context - 1,
+            case.context - 1 + int(case.answer_ids.numel()),
+            device=case.input_ids.device,
+        )
+        logits = output.logits[0, positions, :]
+        del output
+        return logits
+    raise ValueError(f"Unknown distillation target: {target}")
+
+
 def cache_teacher_logits(
     model: nn.Module,
     tokenizer,
@@ -93,6 +126,7 @@ def cache_teacher_logits(
     placements: list[str],
     contexts: list[int],
     device: torch.device,
+    target: str,
 ) -> list[CachedPrompt]:
     rows: list[CachedPrompt] = []
     model.eval()
@@ -101,21 +135,18 @@ def cache_teacher_logits(
             for key in keys:
                 for placement in placements:
                     case = build_prompt_case(tokenizer, context, key, placement, device)
-                    output = model(
-                        input_ids=case.input_ids,
-                        attention_mask=case.attention_mask,
-                        use_cache=False,
-                    )
+                    teacher_logits = run_logits_for_target(model, case, target)
                     rows.append(
                         CachedPrompt(
                             key=key,
                             placement=placement,
                             context=context,
+                            target=target,
                             case=case,
-                            teacher_logits=output.logits[:, -1, :].detach().cpu(),
+                            teacher_logits=teacher_logits.detach().cpu(),
                         )
                     )
-                    del output
+                    del teacher_logits
                     if device.type == "cuda":
                         torch.cuda.empty_cache()
     return rows
@@ -134,20 +165,77 @@ def wrap_socket_layers_with_adapters(
         layer.self_attn = SVAResidualOutputAdapter(layer.self_attn, hidden_size, rank, scale).to(device)
 
 
+def collect_adapter_state(model: nn.Module, socket_layers: list[int]) -> dict[str, torch.Tensor]:
+    state: dict[str, torch.Tensor] = {}
+    for layer_idx in socket_layers:
+        attention = model.model.layers[layer_idx].self_attn
+        if not isinstance(attention, SVAResidualOutputAdapter):
+            raise TypeError(f"Layer {layer_idx} is not wrapped with SVAResidualOutputAdapter.")
+        state[f"layers.{layer_idx}.down.weight"] = attention.down.weight.detach().cpu()
+        state[f"layers.{layer_idx}.up.weight"] = attention.up.weight.detach().cpu()
+    return state
+
+
+def save_adapter_bundle(
+    output_dir: Path,
+    model: nn.Module,
+    socket_layers: list[int],
+    args: argparse.Namespace,
+    results: list[dict[str, float | int | str]],
+) -> None:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    manifest: dict[str, Any] = {
+        "format": "sva_residual_output_adapter_v1",
+        "model_id": args.model_id,
+        "artifact_dir": str(args.artifact_dir),
+        "socket_layers": socket_layers,
+        "shortlist": args.shortlist,
+        "budget": args.budget,
+        "query_chunk_size": args.query_chunk_size,
+        "summon_mode": args.summon_mode,
+        "adapter_rank": args.adapter_rank,
+        "adapter_scale": args.adapter_scale,
+        "distill_steps": args.distill_steps,
+        "lr": args.lr,
+        "temperature": args.temperature,
+        "target": args.target,
+        "train_contexts": args.contexts,
+        "train_keys": args.train_keys,
+        "eval_keys": args.eval_keys,
+        "train_placements": args.train_placements,
+        "eval_placements": args.eval_placements,
+        "results": results,
+    }
+    (output_dir / "adapter_config.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    torch.save({"state_dict": collect_adapter_state(model, socket_layers)}, output_dir / "adapter_weights.pt")
+
+
+def load_adapter_bundle(adapter_dir: Path) -> tuple[dict[str, Any], dict[str, torch.Tensor]]:
+    manifest = json.loads((adapter_dir / "adapter_config.json").read_text(encoding="utf-8"))
+    payload = torch.load(adapter_dir / "adapter_weights.pt", map_location="cpu")
+    state_dict = payload.get("state_dict", payload)
+    if not isinstance(state_dict, dict):
+        raise TypeError(f"Unexpected adapter weights payload in {adapter_dir}.")
+    return manifest, state_dict
+
+
+def load_adapter_weights(model: nn.Module, socket_layers: list[int], state_dict: dict[str, torch.Tensor]) -> None:
+    with torch.no_grad():
+        for layer_idx in socket_layers:
+            attention = model.model.layers[layer_idx].self_attn
+            if not isinstance(attention, SVAResidualOutputAdapter):
+                raise TypeError(f"Layer {layer_idx} is not wrapped with SVAResidualOutputAdapter.")
+            attention.down.weight.copy_(state_dict[f"layers.{layer_idx}.down.weight"].to(attention.down.weight.device))
+            attention.up.weight.copy_(state_dict[f"layers.{layer_idx}.up.weight"].to(attention.up.weight.device))
+
+
 def run_student_final_logits(
     model: nn.Module,
     patcher: SVALlamaPatcher,
     cached: CachedPrompt,
 ) -> torch.Tensor:
     patcher.reset_catalogs()
-    output = model(
-        input_ids=cached.case.input_ids,
-        attention_mask=cached.case.attention_mask,
-        use_cache=False,
-    )
-    logits = output.logits[:, -1, :]
-    del output
-    return logits
+    return run_logits_for_target(model, cached.case, cached.target)
 
 
 def evaluate(
@@ -216,6 +304,8 @@ def main() -> None:
     parser.add_argument("--temperature", type=float, default=1.0)
     parser.add_argument("--grad-clip", type=float, default=1.0)
     parser.add_argument("--log-every", type=int, default=4)
+    parser.add_argument("--target", choices=["final", "answer"], default="final")
+    parser.add_argument("--output-dir", type=Path, default=None)
     parser.add_argument("--attn-implementation", default="sdpa")
     parser.add_argument("--device", choices=["auto", "cpu", "cuda"], default="auto")
     parser.add_argument("--dtype", choices=["auto", "float32", "bfloat16", "float16"], default="auto")
@@ -267,9 +357,10 @@ def main() -> None:
     print(f"budget,{args.budget}", flush=True)
     print(f"adapter_rank,{args.adapter_rank}", flush=True)
     print(f"distill_steps,{args.distill_steps}", flush=True)
+    print(f"target,{args.target}", flush=True)
 
-    train_rows = cache_teacher_logits(model, tokenizer, train_keys, train_placements, contexts, device)
-    eval_rows = cache_teacher_logits(model, tokenizer, eval_keys, eval_placements, contexts, device)
+    train_rows = cache_teacher_logits(model, tokenizer, train_keys, train_placements, contexts, device, args.target)
+    eval_rows = cache_teacher_logits(model, tokenizer, eval_keys, eval_placements, contexts, device, args.target)
 
     for parameter in model.parameters():
         parameter.requires_grad_(False)
@@ -320,6 +411,9 @@ def main() -> None:
     all_results.extend(evaluate(model, patcher, train_rows, "distilled_train", device))
     all_results.extend(evaluate(model, patcher, eval_rows, "distilled_eval", device))
     emit_means(all_results)
+    if args.output_dir is not None:
+        save_adapter_bundle(args.output_dir, model, socket_layers, args, all_results)
+        print(f"adapter_output_dir,{args.output_dir}", flush=True)
     print("late4_logit_distill_done", flush=True)
 
 

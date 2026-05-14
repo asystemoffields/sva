@@ -513,9 +513,14 @@ class SVALlamaPatcher:
 
     def reset_catalogs(self) -> None:
         for layer in self.model.model.layers:
-            attention = layer.self_attn
+            attention = self._unwrap_sva_attention(layer.self_attn)
             if isinstance(attention, SVALlamaAttention):
                 attention.reset_catalog()
+
+    def _unwrap_sva_attention(self, attention: nn.Module) -> nn.Module:
+        while hasattr(attention, "sva_attn"):
+            attention = getattr(attention, "sva_attn")
+        return attention
 
     def __enter__(self) -> "SVALlamaPatcher":
         return self.patch()

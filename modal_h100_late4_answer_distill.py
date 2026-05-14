@@ -1,11 +1,11 @@
-"""Modal H100 runner for tight-budget late4 logit distillation."""
+"""Modal H100 runner for tight-budget late4 answer-token distillation."""
 
 from __future__ import annotations
 
 import modal
 
 
-app = modal.App("sva-late4-logit-distill-h100")
+app = modal.App("sva-late4-answer-distill-h100")
 volume = modal.Volume.from_name("sva-artifacts", create_if_missing=True)
 
 image = (
@@ -17,7 +17,7 @@ image = (
 )
 
 
-REMOTE_ADAPTER_DIR = "/artifacts/sva-late4-512x128-adapter-v1"
+REMOTE_ADAPTER_DIR = "/artifacts/sva-late4-512x128-answerdistill-v1"
 
 ARGS = [
     "--model-id",
@@ -56,6 +56,8 @@ ARGS = [
     "1.0",
     "--log-every",
     "4",
+    "--target",
+    "answer",
     "--output-dir",
     REMOTE_ADAPTER_DIR,
     "--attn-implementation",
@@ -68,14 +70,14 @@ ARGS = [
 
 
 @app.function(image=image, gpu="H100", timeout=120 * 60, volumes={"/artifacts": volume})
-def run_late4_logit_distill() -> str:
+def run_late4_answer_distill() -> str:
     import os
     import subprocess
     import sys
 
     os.chdir("/root/sva")
     cmd = [sys.executable, "-u", "experiments/sva_late4_logit_distill.py", *ARGS]
-    print("late4_logit_distill_h100_start", flush=True)
+    print("late4_answer_distill_h100_start", flush=True)
     print("command," + " ".join(cmd), flush=True)
     process = subprocess.Popen(
         cmd,
@@ -91,19 +93,19 @@ def run_late4_logit_distill() -> str:
             print(line, end="", flush=True)
             lines.append(line)
     return_code = process.wait()
-    print(f"late4_logit_distill_h100_exit,{return_code}", flush=True)
+    print(f"late4_answer_distill_h100_exit,{return_code}", flush=True)
     if return_code != 0:
-        raise RuntimeError(f"Late4 logit distillation failed with exit code {return_code}")
+        raise RuntimeError(f"Late4 answer distillation failed with exit code {return_code}")
     volume.commit()
-    print(f"late4_adapter_remote_dir,{REMOTE_ADAPTER_DIR}", flush=True)
+    print(f"late4_answer_adapter_remote_dir,{REMOTE_ADAPTER_DIR}", flush=True)
     return "".join(lines)
 
 
 @app.local_entrypoint()
 def main() -> str:
-    call = run_late4_logit_distill.spawn()
+    call = run_late4_answer_distill.spawn()
     print(f"function_call_id,{call.object_id}")
     print(f"dashboard,{call.get_dashboard_url()}")
     print(f"remote_adapter_dir,{REMOTE_ADAPTER_DIR}")
-    print("download_command,modal volume get sva-artifacts /sva-late4-512x128-adapter-v1 results/hf_artifacts")
+    print("download_command,modal volume get sva-artifacts /sva-late4-512x128-answerdistill-v1 results/hf_artifacts")
     return call.object_id
