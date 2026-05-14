@@ -118,7 +118,9 @@ The 8k head-to-head result separates method quality from serving speed. At `cont
 
 The first long-context extension proxy found the current boundary. With the frozen 8k `2x256` artifact, fixed `2048/512` recall falls from `0.977778` at 8k to `0.848611` at 32k, `0.657639` at 128k, and `0.365885` at 1M. Scaling the shortlist and verifier budget recovers the 128k case: `16384/2048` reached `0.943056` verified top-16 recall with `64x` fewer exact scores and value reads. At 1M, the same setting reached `0.645399`, which points to catalog capacity as the next method target.
 
-The next target is a real long-context language benchmark: measure where full attention hits the practical wall, then test whether SVA preserves task accuracy beyond that wall while keeping sparse exact attention work. In parallel, the method target is a richer catalog: multi-scale codes, layer-aware budgets, and shortlist objectives trained for the target context scale.
+The first language-level passkey benchmark is a sharper stress test. With the passkey at the beginning and the query at the end, adaptive inverted decode was too aggressive: at `4096` tokens it added `3.776614` answer NLL versus full attention while verifying about `32` tokens per decode query. Fixed scan decode with `2048/512` recovered the short-context behavior: answer NLL deltas were `0.076570` at `4096` and `0.163233` at `8192`, with `8x` and `16x` fewer value reads. Scaling to `8192/2048` recovered the longer rows too: answer NLL delta was `-0.016004` at `16384` and `0.116894` at `32768`, with `8x` and `16x` fewer value reads. Exact-string retrieval looks like a budget-policy problem through 32k, while the current prefill path remains the obvious systems bottleneck.
+
+The next target is a serving-shaped passkey benchmark: preserve the `8192/2048` quality while reducing prefill and decode cost. In parallel, the method target is a richer catalog: multi-scale codes, layer-aware budgets, and shortlist objectives trained for exact-token survival at the target context scale.
 
 ## Files
 
@@ -146,6 +148,7 @@ The next target is a real long-context language benchmark: measure where full at
 - `experiments/sva_8k_head_to_head_benchmark.py`: 8k full-attention versus SVA deployment benchmark with wall-clock and quality metrics.
 - `experiments/sva_inverted_adaptive_decode_benchmark.py`: cached-decode benchmark for inverted-code adaptive SVA lookup.
 - `experiments/sva_long_context_recall_sim.py`: long-context SVA recall proxy from real SmolLM2 Q/K activations and synthetic larger key banks.
+- `experiments/sva_passkey_language_benchmark.py`: passkey-style long-context language benchmark scoring the correct answer tokens after cached prefill.
 - `experiments/sva_artifact_io.py`: save/load helpers for portable frozen SVA artifact bundles.
 - `experiments/export_sva_artifact.py`: exporter for HF/GitHub-ready SVA artifact folders.
 - `experiments/sva_address_scaling.py`: address selectivity calculator for long contexts.
@@ -174,6 +177,9 @@ The next target is a real long-context language benchmark: measure where full at
 - `modal_h100_inverted_posting_decode.py`: Modal H100 runner for cached posting-list decode benchmarking.
 - `modal_h100_long_context_recall.py`: Modal H100 runner for the fixed-budget long-context recall proxy.
 - `modal_h100_long_context_scaleout.py`: Modal H100 runner for the long-context shortlist and budget scale-out proxy.
+- `modal_h100_passkey_language.py`: Modal H100 runner for adaptive inverted passkey language benchmarking.
+- `modal_h100_passkey_language_scan.py`: Modal H100 runner for fixed-scan passkey language benchmarking.
+- `modal_h100_passkey_language_scaleout.py`: Modal H100 runner for passkey shortlist and budget scale-out.
 - `modal_h100_million_stream.py`: Modal H100 runner for the million-token address-pressure simulation.
 - `modal_h100_learned_ranker.py`: Modal H100 runner for the learned compressed-ranker test.
 - `modal_h100_learned_ranker_generalize.py`: Modal H100 runner for the held-out-text ranker test.
@@ -239,6 +245,7 @@ The next target is a real long-context language benchmark: measure where full at
 - `results/artifact_export_snapshot_2026-05-14.md`: first local deployable SVA artifact export snapshot.
 - `results/production_adapter_snapshot_2026-05-14.md`: first production-facing adapter and local chat demo snapshot.
 - `results/long_context_extension_snapshot_2026-05-14.md`: 8k head-to-head plus 128k/1M long-context recall extension snapshot.
+- `results/passkey_language_snapshot_2026-05-14.md`: first passkey-style language stress test for SVA decode policy.
 - `results/hf_artifacts/sva-smollm2-135m-2x256-v1/`: local HF/GitHub-ready `2x256` SVA artifact bundle.
 - `notes/attention_replacement_findings.md`: broader research log leading to SVA.
 - `notes/hierarchical_tree_sva.md`: side-track notes for hierarchical chunk/tree SVA.
