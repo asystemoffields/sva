@@ -170,6 +170,8 @@ Answer-token distillation is the strongest tight-budget fidelity result so far. 
 
 Combining answer-token KL with a small gold-answer CE term is the strongest tight-budget adaptation result so far. With objective `answer_KL + 0.01 * gold_CE`, held-out answer-token KL landed at `0.020634`, close to pure answer-token distillation. On the 9-case full answer-decode panel, the combined adapter improved over unadapted `512/128` SVA from answer KL `0.080711` to `0.030835`, top-1 `0.809524` to `0.936508`, cosine `0.998966` to `0.999417`, and gold-answer NLL delta `-0.013716` to `-0.505290`, while preserving the same `256x` decode exact-read reduction. The next target is a CE-weight sweep around `0.01`.
 
+The answer-KL+CE adapter also held on a broader 24-case held-out panel with eight unseen keys across start/middle/end placements at `32768`. Unadapted `512/128` late4 SVA reached answer KL `0.096806`, top-1 `0.851190`, cosine `0.998147`, and NLL delta `-0.029969`; the CE001 adapter reached answer KL `0.031916`, top-1 `0.946429`, cosine `0.999103`, and NLL delta `-0.474124`, still at the same `256x` decode exact-read reduction. Wall-clock remains scan-summon dominated, so the next production step is indexed/cached summon against this quality target.
+
 ## Files
 
 - `experiments/sva_kill_test.py`: standalone toy benchmark.
@@ -257,6 +259,7 @@ Combining answer-token KL with a small gold-answer CE term is the strongest tigh
 - `modal_h100_late4_answerdistill_adapter_answer.py`: Modal H100 runner for answer-decode validation of the answer-distilled late4 adapter.
 - `modal_h100_late4_answer_ce_distill.py`: Modal H100 runner for tight-budget late4 answer-token KL plus gold-CE distillation.
 - `modal_h100_late4_answerce_adapter_answer.py`: Modal H100 runner for answer-decode validation of the answer-KL+CE late4 adapter.
+- `modal_h100_late4_answerce_broad_panel.py`: Modal H100 runner for broader held-out validation of the answer-KL+CE late4 adapter.
 - `modal_h100_block_elevator.py`: Modal H100 runner for block-first SVA elevator benchmarking.
 - `modal_h100_block_hybrid.py`: Modal H100 runner for token/block hybrid SVA benchmarking.
 - `modal_h100_learned_hybrid_selector.py`: Modal H100 runner for learned token/block selector benchmarking.
@@ -358,6 +361,7 @@ Combining answer-token KL with a small gold-answer CE term is the strongest tigh
 - `results/late4_adapter_answer_snapshot_2026-05-14.md`: saved-adapter full answer-decode validation with unadapted tight-budget SVA control.
 - `results/late4_answer_distill_snapshot_2026-05-14.md`: answer-token distillation and full answer-decode validation at tight late4 budget.
 - `results/late4_answer_ce_distill_snapshot_2026-05-14.md`: answer-token KL plus gold-CE distillation and full answer-decode validation at tight late4 budget.
+- `results/late4_answerce_broad_panel_snapshot_2026-05-14.md`: broader held-out validation of the answer-KL+CE late4 adapter.
 - `results/hf_artifacts/sva-smollm2-135m-2x256-v1/`: local HF/GitHub-ready `2x256` SVA artifact bundle.
 - `results/hf_artifacts/sva-smollm2-135m-2x256-longctx-refresh-v1/`: local HF/GitHub-ready long-context refreshed `2x256` SVA artifact bundle.
 - `results/hf_artifacts/sva-smollm2-135m-2x256-attnweighted-v1/`: local HF/GitHub-ready attention-weighted long-context `2x256` SVA artifact bundle.
@@ -438,6 +442,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_bac
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-late4-answerdistill-adapter-answer -ModalFile modal_h100_late4_answerdistill_adapter_answer.py
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-late4-answer-ce-distill -ModalFile modal_h100_late4_answer_ce_distill.py
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-late4-answerce-adapter-answer -ModalFile modal_h100_late4_answerce_adapter_answer.py
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-late4-answerce-broad-panel -ModalFile modal_h100_late4_answerce_broad_panel.py
 ```
 
 The launcher uses `modal run --detach` and writes local metadata, stdout, stderr, and result files under `results/modal_runs/`.
