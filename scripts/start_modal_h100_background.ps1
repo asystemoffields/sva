@@ -1,6 +1,7 @@
 param(
     [string]$Name = "sva-h100",
-    [string]$ModalFile = "modal_h100_trainable.py"
+    [string]$ModalFile = "modal_h100_trainable.py",
+    [string[]]$ModalArgs = @()
 )
 
 $ErrorActionPreference = "Stop"
@@ -29,6 +30,9 @@ $Args = @(
     $Result,
     $ModalFile
 )
+if ($ModalArgs.Count -gt 0) {
+    $Args += $ModalArgs
+}
 
 $Process = Start-Process `
     -FilePath "modal" `

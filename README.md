@@ -172,6 +172,8 @@ Combining answer-token KL with a small gold-answer CE term is the strongest tigh
 
 The answer-KL+CE adapter also held on a broader 24-case held-out panel with eight unseen keys across start/middle/end placements at `32768`. Unadapted `512/128` late4 SVA reached answer KL `0.096806`, top-1 `0.851190`, cosine `0.998147`, and NLL delta `-0.029969`; the CE001 adapter reached answer KL `0.031916`, top-1 `0.946429`, cosine `0.999103`, and NLL delta `-0.474124`, still at the same `256x` decode exact-read reduction. Wall-clock remains scan-summon dominated, so the next production step is indexed/cached summon against this quality target.
 
+The first indexed-summon check on that same 24-case panel is quality-credible but slower in the current PyTorch path. With inverted decode at `16` cells/subspace, the CE001 adapter reached answer KL `0.032604`, top-1 `0.922619`, cosine `0.999239`, and NLL delta `-0.434830`; at `32` cells/subspace it reached KL `0.028585`, top-1 `0.898810`, cosine `0.999453`, and NLL delta `-0.320555`. Decode slowdown was about `3.3x` versus full attention, worse than the scan row's `1.82x`, because the posting-list union still summons thousands of candidates before exact verification. The next test tightens indexed budgets to `4` and `8` cells/subspace.
+
 ## Files
 
 - `experiments/sva_kill_test.py`: standalone toy benchmark.
@@ -363,6 +365,7 @@ The answer-KL+CE adapter also held on a broader 24-case held-out panel with eigh
 - `results/late4_answer_distill_snapshot_2026-05-14.md`: answer-token distillation and full answer-decode validation at tight late4 budget.
 - `results/late4_answer_ce_distill_snapshot_2026-05-14.md`: answer-token KL plus gold-CE distillation and full answer-decode validation at tight late4 budget.
 - `results/late4_answerce_broad_panel_snapshot_2026-05-14.md`: broader held-out validation of the answer-KL+CE late4 adapter.
+- `results/late4_answerce_inverted_panel_snapshot_2026-05-14.md`: indexed-summon validation of the answer-KL+CE late4 adapter.
 - `results/hf_artifacts/sva-smollm2-135m-2x256-v1/`: local HF/GitHub-ready `2x256` SVA artifact bundle.
 - `results/hf_artifacts/sva-smollm2-135m-2x256-longctx-refresh-v1/`: local HF/GitHub-ready long-context refreshed `2x256` SVA artifact bundle.
 - `results/hf_artifacts/sva-smollm2-135m-2x256-attnweighted-v1/`: local HF/GitHub-ready attention-weighted long-context `2x256` SVA artifact bundle.
@@ -445,6 +448,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_bac
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-late4-answerce-adapter-answer -ModalFile modal_h100_late4_answerce_adapter_answer.py
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-late4-answerce-broad-panel -ModalFile modal_h100_late4_answerce_broad_panel.py
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-late4-answerce-inverted-panel -ModalFile modal_h100_late4_answerce_inverted_panel.py
+powershell -NoProfile -ExecutionPolicy Bypass -Command "& '.\scripts\start_modal_h100_background.ps1' -Name 'sva-h100-late4-answerce-inverted-tight-panel' -ModalFile 'modal_h100_late4_answerce_inverted_panel.py' -ModalArgs '--cells','4,8'"
 ```
 
 The launcher uses `modal run --detach` and writes local metadata, stdout, stderr, and result files under `results/modal_runs/`.
