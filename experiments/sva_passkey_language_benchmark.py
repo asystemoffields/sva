@@ -309,6 +309,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Passkey long-context language benchmark for SVA.")
     parser.add_argument("--model-id", default="HuggingFaceTB/SmolLM2-135M-Instruct")
     parser.add_argument("--artifact-dir", type=Path, default=Path("results/hf_artifacts/sva-smollm2-135m-2x256-v1"))
+    parser.add_argument("--long-artifact-dir", type=Path, default=None)
+    parser.add_argument("--long-artifact-min-context", type=int, default=0)
     parser.add_argument("--contexts", default="4096,8192,16384,32768")
     parser.add_argument("--teacher-context-max", type=int, default=32768)
     parser.add_argument("--placements", default="start")
@@ -358,6 +360,9 @@ def main() -> None:
     print(f"device,{device}", flush=True)
     print(f"dtype,{dtype}", flush=True)
     print(f"artifact_dir,{args.artifact_dir}", flush=True)
+    if args.long_artifact_dir is not None:
+        print(f"long_artifact_dir,{args.long_artifact_dir}", flush=True)
+        print(f"long_artifact_min_context,{args.long_artifact_min_context}", flush=True)
     print(f"contexts,{args.contexts}", flush=True)
     print(f"placements,{args.placements}", flush=True)
     print(f"summon_mode,{args.summon_mode}", flush=True)
@@ -370,9 +375,15 @@ def main() -> None:
                 full_result = score_answer_decode(model, case, device, patcher=None)
                 emit_score("passkey_language_row", "full", case, full_result)
 
+            selected_artifact_dir = args.artifact_dir
+            sva_variant = "sva"
+            if args.long_artifact_dir is not None and context >= args.long_artifact_min_context:
+                selected_artifact_dir = args.long_artifact_dir
+                sva_variant = "sva_long"
+
             patcher = patch_llama_attention(
                 model,
-                args.artifact_dir,
+                selected_artifact_dir,
                 shortlist=args.shortlist,
                 budget=args.budget,
                 assign_chunk_size=args.assign_chunk_size,
@@ -386,7 +397,7 @@ def main() -> None:
             )
             try:
                 sva_result = score_answer_decode(model, case, device, patcher=patcher)
-                emit_score("passkey_language_row", "sva", case, sva_result)
+                emit_score("passkey_language_row", sva_variant, case, sva_result)
             finally:
                 patcher.unpatch()
 
@@ -397,6 +408,7 @@ def main() -> None:
                     {
                         "context": context,
                         "placement": placement,
+                        "variant": sva_variant,
                         "answer_nll_delta": sva_result.answer_nll - full_result.answer_nll,
                         "prefill_slowdown": sva_result.prefill_ms / max(full_result.prefill_ms, 1e-9),
                         "decode_slowdown": sva_result.decode_ms / max(full_result.decode_ms, 1e-9),

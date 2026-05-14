@@ -56,6 +56,8 @@ Held-out codebook refresh confirmed the codebook-quality opening. At `32768`, th
 
 The first refreshed long-context artifact now exists locally at `results/hf_artifacts/sva-smollm2-135m-2x256-longctx-refresh-v1`. It preserves the long-context gain as a deployable profile: at `32768`, it reaches teacher top-16 recall `0.630588/0.725071/0.809860` at budgets `512/1024/2048`, with score cosine `0.945643`, normalized code entropy `0.978694`, and max code fraction `0.014597`. At `8192`, it reaches `0.952637/0.988589/0.998788`, below the original artifact's `0.972367/0.993978/0.999295`, so the next production path is profile routing.
 
+The first profile-routed passkey language test did not convert the recall gain into an answer-NLL gain. With original profile at `8192`, refreshed profile at `16384/32768`, and scan `8192/2048`, answer NLL deltas were `0.070947`, `0.042013`, and `0.138533`. The earlier original-profile scale-out row was slightly better at `16384/32768` (`-0.016004` and `0.116894`). The next refresh should be evidence-aware rather than plain entropy/balance refresh.
+
 ## Million-Token Constraint
 
 At a 1,000,000-token context, average prefix length is about 500,000. A usable replacement should keep exact full-dimensional QK scoring in the rough range of 128 to 1024 candidates per query.
@@ -125,9 +127,10 @@ The important refinement is distribution matching. High code entropy is useful w
 
 ## Next Verification Step
 
-The next architectural test is language-facing context-matched serving:
+The next architectural test is evidence-aware context-matched serving:
 
 - keep the exact verifier unchanged
-- compare the current 8k artifact, the refreshed long-context profile, and a context-length router
+- compare original and refreshed profiles on passkey key survival by layer/head/query
+- fit the next long-context profile with attention/evidence-weighted codebooks under entropy and max-load constraints
 - track recall, score distortion, normalized code entropy, max code load, value reads, and wall time
-- rerun the passkey and long-context recall benchmarks with the selected profile
+- rerun the profile-router passkey benchmark only after key survival improves
