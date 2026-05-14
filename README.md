@@ -82,6 +82,8 @@ The attention-label supervised coarse run recovered the signal and produced a sm
 
 Attention-weighted coarse codebooks tested that next branch. Fitting the coarse codebook in the fine-ranker space with attention top-16 key boosts helped most at the tightest shortlist: `4x64` with boost `4` reached `0.773717` at shortlist `1024`, above `0.764865` unsupervised and above the separate supervised coarse ranker's `0.769128`. At `2048`, it reached `0.794999`, a smaller lift over unsupervised and below the separate supervised ranker's `0.797464`. At `4096`, it tied unsupervised. The next combined test is to train the separate coarse ranker, then fit attention-weighted codebooks inside that coarse space.
 
+The combined test stacked those gains. Training the supervised rank-64 coarse scorer and then fitting attention-weighted `4x64` codebooks inside that coarse space reached `0.803184` at shortlist `4096`, `0.799882` at shortlist `2048`, and `0.776445` at shortlist `1024`. This is the current best serving candidate for the learned-ranker branch. The next pressure test is shorter shortlists, especially `512` and `768`, with the same verifier budget.
+
 ## Files
 
 - `experiments/sva_kill_test.py`: standalone toy benchmark.
@@ -119,6 +121,7 @@ Attention-weighted coarse codebooks tested that next branch. Fitting the coarse 
 - `modal_h100_supervised_coarse_pq_attention16.py`: Modal H100 runner for supervised coarse PQ with attention top-16 labels.
 - `modal_h100_weighted_coarse_pq.py`: Modal H100 runner for attention-weighted coarse PQ in the fine-ranker space.
 - `modal_h100_weighted_supervised_coarse_pq.py`: Modal H100 runner for attention-weighted codebooks in a supervised coarse space.
+- `modal_h100_weighted_supervised_coarse_pq_tight.py`: Modal H100 runner for tight-shortlist weighted supervised coarse PQ.
 - `scripts/start_modal_h100_background.ps1`: detached Modal launcher that writes run logs under `results/modal_runs/`.
 - `results/verification_snapshot_2026-05-13.md`: current kill-test results.
 - `results/trainable_recall_snapshot_2026-05-13.md`: H100 trainable-representation checkpoint.
@@ -141,6 +144,7 @@ Attention-weighted coarse codebooks tested that next branch. Fitting the coarse 
 - `results/supervised_coarse_pq_snapshot_2026-05-13.md`: supervised coarse-stage PQ lookup snapshot.
 - `results/supervised_coarse_pq_attention16_snapshot_2026-05-13.md`: supervised coarse PQ with attention top-16 labels snapshot.
 - `results/weighted_coarse_pq_snapshot_2026-05-13.md`: attention-weighted coarse PQ codebook snapshot.
+- `results/weighted_supervised_coarse_pq_snapshot_2026-05-13.md`: weighted codebooks in supervised coarse space snapshot.
 - `notes/attention_replacement_findings.md`: broader research log leading to SVA.
 - `notes/million_token_scaling.md`: scaling target for million-token contexts.
 
@@ -165,6 +169,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_bac
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-supervised-coarse-pq-attention16 -ModalFile modal_h100_supervised_coarse_pq_attention16.py
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-weighted-coarse-pq -ModalFile modal_h100_weighted_coarse_pq.py
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-weighted-supervised-coarse-pq -ModalFile modal_h100_weighted_supervised_coarse_pq.py
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-weighted-supervised-coarse-pq-tight -ModalFile modal_h100_weighted_supervised_coarse_pq_tight.py
 ```
 
 The launcher uses `modal run --detach` and writes local metadata, stdout, stderr, and result files under `results/modal_runs/`.
