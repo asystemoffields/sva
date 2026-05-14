@@ -9,3 +9,4 @@ build/
 *.egg-info/
 results/modal_runs/*
 !results/modal_runs/.gitkeep
+HANDOFF.local.md
