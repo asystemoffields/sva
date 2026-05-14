@@ -452,11 +452,13 @@ class SVALlamaPatcher:
         adaptive_mid_budget: int | None = None,
         adaptive_low_margin: float = 0.35,
         adaptive_high_margin: float = 0.70,
+        layers: list[int] | None = None,
     ) -> None:
         self.model = model
         self.bundle = bundle
         self.stats = SVAStats()
         self.originals: dict[int, nn.Module] = {}
+        self.layers = None if layers is None else list(dict.fromkeys(int(layer_idx) for layer_idx in layers))
         self.serving = SVALlamaServingConfig(
             rank_dim=bundle.rank_dim,
             coarse_shortlist=bundle.default_shortlist if shortlist is None else int(shortlist),
@@ -472,20 +474,24 @@ class SVALlamaPatcher:
         )
 
     def patch(self) -> "SVALlamaPatcher":
-        layers = getattr(getattr(self.model, "model", None), "layers", None)
-        if layers is None:
+        model_layers = getattr(getattr(self.model, "model", None), "layers", None)
+        if model_layers is None:
             raise ValueError("Expected a Hugging Face Llama-style model with model.layers.")
         if self.originals:
             return self
 
-        if self.bundle.layer_count != len(layers):
-            raise ValueError(f"Artifact has {self.bundle.layer_count} layers but model has {len(layers)}.")
+        if self.bundle.layer_count != len(model_layers):
+            raise ValueError(f"Artifact has {self.bundle.layer_count} layers but model has {len(model_layers)}.")
         model_id = self.bundle.model_id
         model_name = getattr(getattr(self.model, "config", None), "_name_or_path", None)
         if model_id and model_name and str(model_name) not in {"", model_id}:
             raise ValueError(f"Artifact model_id={model_id!r} does not match loaded model {model_name!r}.")
 
-        for layer_idx, layer in enumerate(layers):
+        patch_layers = self.layers if self.layers is not None else list(range(len(model_layers)))
+        for layer_idx in patch_layers:
+            if layer_idx < 0 or layer_idx >= len(model_layers):
+                raise ValueError(f"Patch layer index {layer_idx} is outside model layer range 0..{len(model_layers) - 1}.")
+            layer = model_layers[layer_idx]
             artifacts = self.bundle.layers.get(layer_idx)
             if artifacts is None:
                 raise ValueError(f"Missing SVA artifacts for layer {layer_idx}.")
@@ -540,6 +546,7 @@ def patch_llama_attention(
     adaptive_mid_budget: int | None = None,
     adaptive_low_margin: float = 0.35,
     adaptive_high_margin: float = 0.70,
+    layers: list[int] | None = None,
 ) -> SVALlamaPatcher:
     """Patch a Llama-family model with SVA attention and return a reversible handle."""
 
@@ -561,4 +568,5 @@ def patch_llama_attention(
         adaptive_mid_budget=adaptive_mid_budget,
         adaptive_low_margin=adaptive_low_margin,
         adaptive_high_margin=adaptive_high_margin,
+        layers=layers,
     ).patch()

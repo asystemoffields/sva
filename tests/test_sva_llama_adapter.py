@@ -99,6 +99,25 @@ class SVALlamaAdapterTest(unittest.TestCase):
 
         self.assertIs(model.model.layers[1].self_attn, original)
 
+    def test_patch_selected_layers_only(self) -> None:
+        model = make_tiny_model()
+        bundle = make_tiny_bundle()
+        original_layer0 = model.model.layers[0].self_attn
+        original_layer1 = model.model.layers[1].self_attn
+
+        handle = patch_llama_attention(model, bundle, layers=[1])
+        self.assertIs(model.model.layers[0].self_attn, original_layer0)
+        self.assertIsInstance(model.model.layers[1].self_attn, SVALlamaAttention)
+
+        with torch.no_grad():
+            output = model(input_ids=torch.tensor([[1, 2, 3, 4]]), use_cache=False)
+        self.assertEqual(tuple(output.logits.shape), (1, 4, 64))
+        self.assertGreater(handle.stats.summary()["queries"], 0)
+
+        handle.unpatch()
+        self.assertIs(model.model.layers[0].self_attn, original_layer0)
+        self.assertIs(model.model.layers[1].self_attn, original_layer1)
+
 
 if __name__ == "__main__":
     unittest.main()

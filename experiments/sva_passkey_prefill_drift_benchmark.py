@@ -32,6 +32,7 @@ from sva_passkey_language_benchmark import (
     memory_gb,
     sync_if_needed,
 )
+from sva_pretrained_socket_test import format_layer_list, parse_layer_list
 
 
 @dataclass
@@ -170,6 +171,7 @@ def main() -> None:
     parser.add_argument("--assign-chunk-size", type=int, default=8192)
     parser.add_argument("--query-chunk-size", type=int, default=128)
     parser.add_argument("--summon-mode", choices=["scan", "inverted"], default="scan")
+    parser.add_argument("--socket-layers", default="")
     parser.add_argument("--attn-implementation", default="sdpa")
     parser.add_argument("--device", choices=["auto", "cpu", "cuda"], default="auto")
     parser.add_argument("--dtype", choices=["auto", "float32", "bfloat16", "float16"], default="auto")
@@ -200,6 +202,7 @@ def main() -> None:
     profiles = parse_profiles(args.profiles)
     contexts = comma_ints(args.contexts)
     placements = comma_strings(args.placements)
+    socket_layers = parse_layer_list(args.socket_layers, len(model.model.layers))
 
     print("passkey_prefill_drift_start", flush=True)
     print(f"model_id,{args.model_id}", flush=True)
@@ -208,6 +211,7 @@ def main() -> None:
     print(f"contexts,{args.contexts}", flush=True)
     print(f"placements,{args.placements}", flush=True)
     print(f"summon_mode,{args.summon_mode}", flush=True)
+    print(f"socket_layers,{format_layer_list(socket_layers)}", flush=True)
     print(f"profiles,{args.profiles}", flush=True)
 
     for context in contexts:
@@ -224,6 +228,7 @@ def main() -> None:
                     assign_chunk_size=args.assign_chunk_size,
                     query_chunk_size=args.query_chunk_size,
                     summon_mode=args.summon_mode,
+                    layers=socket_layers,
                 )
                 try:
                     sva = score_prefill(model, case, device, patcher)
