@@ -60,7 +60,9 @@ The first profile-routed passkey language test did not convert the recall gain i
 
 Attention-weighted refresh is the first positive evidence-aware catalog result. At `32768`, plain refresh reached teacher top-16 recall `0.635887/0.726002/0.808793` at budgets `512/1024/2048`; strong attention-weighted refresh reached `0.677083/0.762297/0.836887`, above the identity eval-refit ceiling `0.645526/0.734565/0.816081`. Entropy and score cosine moved down while teacher recall moved up, so the objective is evidence survival, with entropy recorded only as a collapse diagnostic.
 
-The first language-facing attention-weighted profile router partially transfers that proxy gain. With original profile at `8192`, strong attention-weighted profile at `16384/32768`, and scan `8192/2048`, answer NLL deltas were `0.070947`, `0.024752`, and `0.152243`. This beats the plain refreshed routed profile at `16384` (`0.042013` to `0.024752`) and loses ground at `32768` (`0.138533` to `0.152243`). Evidence weighting is useful, but a single all-layer strong profile is brittle at the longest tested context.
+The first language-facing attention-weighted profile router partially transfers that proxy gain. With original profile at `8192`, strong attention-weighted profile at `16384/32768`, and scan `8192/2048`, answer NLL deltas were `0.070947`, `0.024752`, and `0.152243`. This beats the plain refreshed routed profile at `16384` (`0.042013` to `0.024752`) and loses ground at `32768` (`0.138533` to `0.152243`).
+
+The mixed-strength attention-weighted sweep says the `32768` issue is not solved by weakening the evidence boost. Boost `1/2/4` reached `0.334068/0.480951/0.593440` NLL delta at `32768`, while the strong effective boost `16` reached `0.152243`. At `16384`, boost `2` was best at `0.021849`. The likely mismatch is now between aggregate teacher top-k recall and exact passkey evidence survival.
 
 ## Million-Token Constraint
 
@@ -131,11 +133,11 @@ The important refinement is distribution matching. High code entropy can coincid
 
 ## Next Verification Step
 
-The next architectural test is mixed-strength evidence-aware serving:
+The next architectural test is passkey-specific evidence survival:
 
 - keep the exact verifier unchanged
-- sweep attention-weighted boosts `1/2/4` and strong boost only where it survives language-facing tests
-- compare key survival by layer/head/query against answer NLL
-- route profiles by context length and possibly layer group
+- compare original, plain refreshed, boost2 attention-weighted, and strong attention-weighted profiles
+- measure whether the exact passkey token positions are summoned and verified by layer/head/query
+- separate summon miss from verifier miss at the final answer query
 - track recall, evidence survival, answer NLL, score distortion, normalized code entropy, max code load, value reads, and wall time
 - keep replacing scan prefill with indexed/elevator summon
