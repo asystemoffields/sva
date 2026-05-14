@@ -80,12 +80,22 @@ class SVALlamaAdapterTest(unittest.TestCase):
         bundle = make_tiny_bundle()
         original = model.model.layers[1].self_attn
 
-        with patch_llama_attention(model, bundle, shortlist=4, budget=2) as handle:
+        with patch_llama_attention(
+            model,
+            bundle,
+            shortlist=4,
+            budget=2,
+            summon_mode="inverted",
+            inverted_cells_per_subspace=2,
+            adaptive_min_budget=1,
+            adaptive_mid_budget=2,
+        ) as handle:
             with torch.no_grad():
                 first = model(input_ids=torch.tensor([[1, 2, 3, 4]]), use_cache=True)
                 second = model(input_ids=torch.tensor([[5]]), use_cache=True, past_key_values=first.past_key_values)
             self.assertEqual(tuple(second.logits.shape), (1, 1, 64))
             self.assertGreater(handle.stats.summary()["queries"], 0)
+            self.assertGreater(handle.stats.summary()["avg_cell_visits"], 0)
 
         self.assertIs(model.model.layers[1].self_attn, original)
 

@@ -114,7 +114,11 @@ The first deployable artifact bundle now exists locally at `results/hf_artifacts
 
 The first production-facing adapter now exists under `sva/`. It loads the artifact bundle, validates tensor shapes, reversibly patches Llama-family Hugging Face attention layers, records runtime stats, and reuses SVA key catalogs across cached decode steps. A local browser chat demo lives at `demo/local_chat_server.py`.
 
-The next target is method-level 8k competitiveness: adaptive per-layer/head/query verification budgets, with full-attention agreement measured against loss, KL, top-1 agreement, and value-read cost.
+The 8k head-to-head result separates method quality from serving speed. At `context=8192`, `shortlist=2048`, and `budget=512`, the all-layer SVA socket reached `loss_delta=0.000907`, `KL=0.000446`, `top1_agreement=0.999695`, and `logit_cosine=0.991188`, with `16x` fewer exact scores and value reads. The current stock PyTorch adapter is slower wall-clock at 8k, so method-level wins have to come from longer contexts, richer catalogs, or a much tighter lookup implementation.
+
+The first long-context extension proxy found the current boundary. With the frozen 8k `2x256` artifact, fixed `2048/512` recall falls from `0.977778` at 8k to `0.848611` at 32k, `0.657639` at 128k, and `0.365885` at 1M. Scaling the shortlist and verifier budget recovers the 128k case: `16384/2048` reached `0.943056` verified top-16 recall with `64x` fewer exact scores and value reads. At 1M, the same setting reached `0.645399`, which points to catalog capacity as the next method target.
+
+The next target is a real long-context language benchmark: measure where full attention hits the practical wall, then test whether SVA preserves task accuracy beyond that wall while keeping sparse exact attention work. In parallel, the method target is a richer catalog: multi-scale codes, layer-aware budgets, and shortlist objectives trained for the target context scale.
 
 ## Files
 
@@ -139,6 +143,9 @@ The next target is method-level 8k competitiveness: adaptive per-layer/head/quer
 - `experiments/sva_full_deployment_benchmark.py`: held-out-document deployment benchmark with context and budget sweeps.
 - `experiments/sva_cached_decode_benchmark.py`: cached-key decode benchmark that separates lookup quality from full-socket harness overhead.
 - `experiments/sva_million_cached_decode_benchmark.py`: synthetic million-token cached-decode benchmark comparing full attention with SVA lookup variants.
+- `experiments/sva_8k_head_to_head_benchmark.py`: 8k full-attention versus SVA deployment benchmark with wall-clock and quality metrics.
+- `experiments/sva_inverted_adaptive_decode_benchmark.py`: cached-decode benchmark for inverted-code adaptive SVA lookup.
+- `experiments/sva_long_context_recall_sim.py`: long-context SVA recall proxy from real SmolLM2 Q/K activations and synthetic larger key banks.
 - `experiments/sva_artifact_io.py`: save/load helpers for portable frozen SVA artifact bundles.
 - `experiments/export_sva_artifact.py`: exporter for HF/GitHub-ready SVA artifact folders.
 - `experiments/sva_address_scaling.py`: address selectivity calculator for long contexts.
@@ -162,6 +169,11 @@ The next target is method-level 8k competitiveness: adaptive per-layer/head/quer
 - `modal_h100_tight_summon_frontier.py`: Modal H100 runner for the tight-shortlist quality/speed frontier.
 - `modal_h100_compact_summon_frontier.py`: Modal H100 runner for compact coarse-code quality/speed frontier sweeps.
 - `modal_h100_export_sva_artifact.py`: Modal H100 runner that exports the default `2x256` SVA artifact bundle to a Modal volume.
+- `modal_h100_8k_head_to_head.py`: Modal H100 runner for the 8k head-to-head deployment benchmark.
+- `modal_h100_inverted_adaptive_decode.py`: Modal H100 runner for adaptive inverted-code decode benchmarking.
+- `modal_h100_inverted_posting_decode.py`: Modal H100 runner for cached posting-list decode benchmarking.
+- `modal_h100_long_context_recall.py`: Modal H100 runner for the fixed-budget long-context recall proxy.
+- `modal_h100_long_context_scaleout.py`: Modal H100 runner for the long-context shortlist and budget scale-out proxy.
 - `modal_h100_million_stream.py`: Modal H100 runner for the million-token address-pressure simulation.
 - `modal_h100_learned_ranker.py`: Modal H100 runner for the learned compressed-ranker test.
 - `modal_h100_learned_ranker_generalize.py`: Modal H100 runner for the held-out-text ranker test.
@@ -226,6 +238,7 @@ The next target is method-level 8k competitiveness: adaptive per-layer/head/quer
 - `results/compact_summon_frontier_snapshot_2026-05-14.md`: compact coarse-code quality and million-token speed frontier snapshot.
 - `results/artifact_export_snapshot_2026-05-14.md`: first local deployable SVA artifact export snapshot.
 - `results/production_adapter_snapshot_2026-05-14.md`: first production-facing adapter and local chat demo snapshot.
+- `results/long_context_extension_snapshot_2026-05-14.md`: 8k head-to-head plus 128k/1M long-context recall extension snapshot.
 - `results/hf_artifacts/sva-smollm2-135m-2x256-v1/`: local HF/GitHub-ready `2x256` SVA artifact bundle.
 - `notes/attention_replacement_findings.md`: broader research log leading to SVA.
 - `notes/hierarchical_tree_sva.md`: side-track notes for hierarchical chunk/tree SVA.

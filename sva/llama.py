@@ -27,6 +27,12 @@ class SVALlamaServingConfig:
     budget: int
     assign_chunk_size: int = 8192
     query_chunk_size: int | None = None
+    summon_mode: str = "scan"
+    inverted_cells_per_subspace: int = 8
+    adaptive_min_budget: int | None = None
+    adaptive_mid_budget: int | None = None
+    adaptive_low_margin: float = 0.35
+    adaptive_high_margin: float = 0.70
 
 
 class SVALlamaAttention(nn.Module):
@@ -60,12 +66,16 @@ class SVALlamaAttention(nn.Module):
         self.register_buffer("sva_coarse_codebooks", layer_artifacts.coarse_codebooks.detach().clone(), persistent=False)
         self._cached_k_low: torch.Tensor | None = None
         self._cached_coarse_codes: torch.Tensor | None = None
+        self._cached_postings: torch.Tensor | None = None
+        self._cached_posting_counts: torch.Tensor | None = None
         self._cached_key_len = 0
         self._cached_signature: tuple[torch.device, torch.dtype, int, int, int] | None = None
 
     def reset_catalog(self) -> None:
         self._cached_k_low = None
         self._cached_coarse_codes = None
+        self._cached_postings = None
+        self._cached_posting_counts = None
         self._cached_key_len = 0
         self._cached_signature = None
 
@@ -139,6 +149,21 @@ class SVALlamaAttention(nn.Module):
         if query_chunk_size is None:
             query_chunk_size = 128 if (q_len >= 4096 or actual_shortlist >= 2048) else q_len
 
+        if self.serving.summon_mode == "inverted" and q_len == 1:
+            return self._inverted_decode_attention(
+                query,
+                key_states,
+                value_states,
+                q_low,
+                k_low,
+                coarse_codes,
+                codebooks,
+                allowed,
+                actual_budget,
+            )
+        if self.serving.summon_mode not in {"scan", "inverted"}:
+            raise ValueError(f"Unknown SVA summon_mode: {self.serving.summon_mode!r}")
+
         output_chunks: list[torch.Tensor] = []
         for q_start in range(0, q_len, query_chunk_size):
             q_end = min(q_start + query_chunk_size, q_len)
@@ -207,6 +232,103 @@ class SVALlamaAttention(nn.Module):
 
         return torch.cat(output_chunks, dim=2)
 
+    def _inverted_decode_attention(
+        self,
+        query: torch.Tensor,
+        key_states: torch.Tensor,
+        value_states: torch.Tensor,
+        q_low: torch.Tensor,
+        k_low: torch.Tensor,
+        coarse_codes: torch.Tensor,
+        codebooks: torch.Tensor,
+        allowed: torch.Tensor,
+        max_budget: int,
+    ) -> torch.Tensor:
+        batch, n_heads, q_len, head_dim = query.shape
+        k_len = key_states.shape[2]
+        if batch != 1 or q_len != 1:
+            raise ValueError("Inverted SVA decode expects batch size 1 and q_len 1.")
+
+        min_budget = min(self.serving.adaptive_min_budget or max_budget, max_budget, k_len)
+        mid_budget = min(self.serving.adaptive_mid_budget or max(min_budget, max_budget // 2), max_budget, k_len)
+        max_budget = min(max_budget, k_len)
+        cells_per_subspace = min(self.serving.inverted_cells_per_subspace, int(codebooks.shape[2]))
+        subspaces = int(codebooks.shape[1])
+        sub_dim = self.serving.rank_dim // subspaces
+        if self._cached_postings is None or self._cached_posting_counts is None:
+            self._rebuild_postings(coarse_codes, int(codebooks.shape[2]))
+        assert self._cached_postings is not None
+        assert self._cached_posting_counts is not None
+        output_heads: list[torch.Tensor] = []
+
+        total_summoned = 0.0
+        total_verified = 0.0
+        total_cell_visits = 0.0
+
+        for head_idx in range(n_heads):
+            qh_low = q_low[0, head_idx, 0].float()
+            q_parts = qh_low.reshape(subspaces, sub_dim)
+            code_scores = torch.einsum("sd,scd->sc", q_parts, codebooks[head_idx].float()) / math.sqrt(
+                self.serving.rank_dim
+            )
+            top_cells = code_scores.topk(cells_per_subspace, dim=-1).indices
+            subspace_ids = torch.arange(subspaces, device=query.device)[:, None]
+            posting_lists = self._cached_postings[head_idx][subspace_ids, top_cells]
+            posting_counts = self._cached_posting_counts[head_idx][subspace_ids, top_cells]
+            slots = torch.arange(posting_lists.shape[-1], device=query.device)
+            posting_valid = slots[None, None, :] < posting_counts[..., None]
+            candidate_idx = posting_lists[posting_valid]
+
+            allowed_head = allowed[0, head_idx, 0]
+            if int(candidate_idx.numel()) > 0:
+                candidate_idx = candidate_idx[allowed_head[candidate_idx]]
+            current_idx = torch.tensor([k_len - 1], device=query.device, dtype=torch.long)
+            if bool(allowed_head[-1].item()):
+                candidate_idx = torch.cat([candidate_idx, current_idx])
+            if int(candidate_idx.numel()) > 0:
+                candidate_idx = torch.unique(candidate_idx)
+            if int(candidate_idx.numel()) == 0:
+                candidate_idx = allowed_head.nonzero(as_tuple=False).flatten()[-1:]
+
+            candidate_scores = (
+                k_low[0, head_idx, candidate_idx].float() * qh_low[None, :]
+            ).sum(dim=-1) / math.sqrt(self.serving.rank_dim)
+            rank_count = min(max_budget, int(candidate_idx.numel()))
+            rank_scores, rank_order = candidate_scores.topk(rank_count, dim=-1)
+            margin_ref = min(min_budget, rank_count) - 1
+            margin = float((rank_scores[0] - rank_scores[margin_ref]).detach().item()) if rank_count > 1 else float("inf")
+            if margin >= self.serving.adaptive_high_margin:
+                budget = min(min_budget, rank_count)
+            elif margin >= self.serving.adaptive_low_margin:
+                budget = min(mid_budget, rank_count)
+            else:
+                budget = rank_count
+
+            selected_idx = candidate_idx[rank_order[:budget]]
+            selected_keys = key_states[0, head_idx, selected_idx]
+            selected_values = value_states[0, head_idx, selected_idx]
+            selected_scores = (selected_keys.float() * query[0, head_idx, 0].float()[None, :]).sum(dim=-1) * self.scaling
+            weights = F.softmax(selected_scores, dim=-1, dtype=torch.float32).to(query.dtype)
+            output_heads.append((weights[:, None] * selected_values).sum(dim=0))
+
+            total_summoned += float(candidate_idx.numel())
+            total_verified += float(budget)
+            total_cell_visits += float(subspaces * cells_per_subspace)
+
+        if self.stats is not None:
+            self.stats.add(
+                int(self.layer_idx or 0),
+                {
+                    "summoned": total_summoned,
+                    "exact_scored": total_verified,
+                    "verified": total_verified,
+                    "queries": float(n_heads),
+                    "cell_visits": total_cell_visits,
+                },
+            )
+
+        return torch.stack(output_heads, dim=0)[None, :, None, :]
+
     def _key_catalog(
         self,
         key_states: torch.Tensor,
@@ -231,15 +353,86 @@ class SVALlamaAttention(nn.Module):
             new_codes = encode_product_keys(new_k_low[0], codebooks, self.serving.assign_chunk_size)
             k_low = torch.cat([self._cached_k_low, new_k_low], dim=2)
             coarse_codes = torch.cat([self._cached_coarse_codes, new_codes], dim=1)
+            if self.serving.summon_mode == "inverted":
+                self._append_postings(new_codes, start, int(codebooks.shape[2]))
         else:
             k_low = torch.einsum("bhsd,hdr->bhsr", key_states.float(), k_proj)
             coarse_codes = encode_product_keys(k_low[0], codebooks, self.serving.assign_chunk_size)
+            if self.serving.summon_mode == "inverted":
+                self._rebuild_postings(coarse_codes, int(codebooks.shape[2]))
 
         self._cached_k_low = k_low.detach()
         self._cached_coarse_codes = coarse_codes.detach()
         self._cached_key_len = k_len
         self._cached_signature = signature
         return k_low, coarse_codes
+
+    @torch.no_grad()
+    def _rebuild_postings(self, coarse_codes: torch.Tensor, codewords: int) -> None:
+        n_heads, k_len, subspaces = coarse_codes.shape
+        counts = torch.zeros(n_heads, subspaces, codewords, device=coarse_codes.device, dtype=torch.long)
+        for head_idx in range(n_heads):
+            for subspace_idx in range(subspaces):
+                labels = coarse_codes[head_idx, :, subspace_idx].long()
+                counts[head_idx, subspace_idx] = torch.bincount(labels, minlength=codewords)
+
+        max_bucket = max(1, int(counts.max().item()))
+        postings = torch.zeros(n_heads, subspaces, codewords, max_bucket, device=coarse_codes.device, dtype=torch.long)
+        for head_idx in range(n_heads):
+            for subspace_idx in range(subspaces):
+                labels = coarse_codes[head_idx, :, subspace_idx].long()
+                order = torch.argsort(labels)
+                head_counts = counts[head_idx, subspace_idx]
+                offsets = torch.cat(
+                    [
+                        torch.zeros(1, device=coarse_codes.device, dtype=torch.long),
+                        head_counts.cumsum(dim=0),
+                    ]
+                )
+                for codeword in range(codewords):
+                    count = int(head_counts[codeword].item())
+                    if count:
+                        start = int(offsets[codeword].item())
+                        end = start + count
+                        postings[head_idx, subspace_idx, codeword, :count] = order[start:end]
+
+        self._cached_postings = postings
+        self._cached_posting_counts = counts
+
+    @torch.no_grad()
+    def _append_postings(self, new_codes: torch.Tensor, start: int, codewords: int) -> None:
+        if self._cached_postings is None or self._cached_posting_counts is None:
+            self._rebuild_postings(self._cached_coarse_codes, codewords)
+            return
+
+        n_heads, new_len, subspaces = new_codes.shape
+        needed = self._cached_posting_counts.clone()
+        for offset in range(new_len):
+            for head_idx in range(n_heads):
+                for subspace_idx in range(subspaces):
+                    codeword = int(new_codes[head_idx, offset, subspace_idx].item())
+                    needed[head_idx, subspace_idx, codeword] += 1
+
+        max_needed = int(needed.max().item())
+        if max_needed > int(self._cached_postings.shape[-1]):
+            next_width = max(max_needed, int(self._cached_postings.shape[-1]) * 2)
+            expanded = torch.zeros(
+                *self._cached_postings.shape[:-1],
+                next_width,
+                device=self._cached_postings.device,
+                dtype=self._cached_postings.dtype,
+            )
+            expanded[..., : self._cached_postings.shape[-1]] = self._cached_postings
+            self._cached_postings = expanded
+
+        for offset in range(new_len):
+            position = start + offset
+            for head_idx in range(n_heads):
+                for subspace_idx in range(subspaces):
+                    codeword = int(new_codes[head_idx, offset, subspace_idx].item())
+                    count = int(self._cached_posting_counts[head_idx, subspace_idx, codeword].item())
+                    self._cached_postings[head_idx, subspace_idx, codeword, count] = position
+                    self._cached_posting_counts[head_idx, subspace_idx, codeword] += 1
 
 
 class SVALlamaPatcher:
@@ -252,6 +445,12 @@ class SVALlamaPatcher:
         shortlist: int | None = None,
         budget: int | None = None,
         assign_chunk_size: int = 8192,
+        summon_mode: str = "scan",
+        inverted_cells_per_subspace: int = 8,
+        adaptive_min_budget: int | None = None,
+        adaptive_mid_budget: int | None = None,
+        adaptive_low_margin: float = 0.35,
+        adaptive_high_margin: float = 0.70,
     ) -> None:
         self.model = model
         self.bundle = bundle
@@ -262,6 +461,12 @@ class SVALlamaPatcher:
             coarse_shortlist=bundle.default_shortlist if shortlist is None else int(shortlist),
             budget=bundle.default_budget if budget is None else int(budget),
             assign_chunk_size=assign_chunk_size,
+            summon_mode=summon_mode,
+            inverted_cells_per_subspace=inverted_cells_per_subspace,
+            adaptive_min_budget=adaptive_min_budget,
+            adaptive_mid_budget=adaptive_mid_budget,
+            adaptive_low_margin=adaptive_low_margin,
+            adaptive_high_margin=adaptive_high_margin,
         )
 
     def patch(self) -> "SVALlamaPatcher":
@@ -326,6 +531,12 @@ def patch_llama_attention(
     shortlist: int | None = None,
     budget: int | None = None,
     assign_chunk_size: int = 8192,
+    summon_mode: str = "scan",
+    inverted_cells_per_subspace: int = 8,
+    adaptive_min_budget: int | None = None,
+    adaptive_mid_budget: int | None = None,
+    adaptive_low_margin: float = 0.35,
+    adaptive_high_margin: float = 0.70,
 ) -> SVALlamaPatcher:
     """Patch a Llama-family model with SVA attention and return a reversible handle."""
 
@@ -340,4 +551,10 @@ def patch_llama_attention(
         shortlist=shortlist,
         budget=budget,
         assign_chunk_size=assign_chunk_size,
+        summon_mode=summon_mode,
+        inverted_cells_per_subspace=inverted_cells_per_subspace,
+        adaptive_min_budget=adaptive_min_budget,
+        adaptive_mid_budget=adaptive_mid_budget,
+        adaptive_low_margin=adaptive_low_margin,
+        adaptive_high_margin=adaptive_high_margin,
     ).patch()

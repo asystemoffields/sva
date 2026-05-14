@@ -39,4 +39,5 @@ class SVAStats:
             "avg_summoned": self.ratio("summoned"),
             "avg_exact_scored": self.ratio("exact_scored"),
             "avg_verified": self.ratio("verified"),
+            "avg_cell_visits": self.ratio("cell_visits"),
         }
