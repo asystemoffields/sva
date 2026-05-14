@@ -112,7 +112,9 @@ Compact coarse-code sweeps found the first clear no-custom-kernel speed lever. A
 
 The first deployable artifact bundle now exists locally at `results/hf_artifacts/sva-smollm2-135m-2x256-v1`. It contains all 30 layers for the `2x256` profile, with `bfloat16` low-rank projections and coarse codebooks, manifest metadata, default `2048/512` serving settings, and a small README. The bundle reloads through `experiments/sva_artifact_io.py` and is ready to publish as a Hugging Face artifact repo or GitHub release asset.
 
-The next target is publication: push the repo to GitHub, then publish the artifact folder to HF or attach it as a release asset.
+The first production-facing adapter now exists under `sva/`. It loads the artifact bundle, validates tensor shapes, reversibly patches Llama-family Hugging Face attention layers, records runtime stats, and reuses SVA key catalogs across cached decode steps. A local browser chat demo lives at `demo/local_chat_server.py`.
+
+The next target is method-level 8k competitiveness: adaptive per-layer/head/query verification budgets, with full-attention agreement measured against loss, KL, top-1 agreement, and value-read cost.
 
 ## Files
 
@@ -140,6 +142,8 @@ The next target is publication: push the repo to GitHub, then publish the artifa
 - `experiments/sva_artifact_io.py`: save/load helpers for portable frozen SVA artifact bundles.
 - `experiments/export_sva_artifact.py`: exporter for HF/GitHub-ready SVA artifact folders.
 - `experiments/sva_address_scaling.py`: address selectivity calculator for long contexts.
+- `sva/`: production-facing artifact loader and Llama attention adapter.
+- `demo/local_chat_server.py`: local HTML chat UI for SmolLM2 running with the exported SVA artifact.
 - `modal_h100_trainable.py`: Modal H100 runner for the trainable benchmark.
 - `modal_h100_socket.py`: Modal H100 runner for the pretrained socket sweep.
 - `modal_h100_three_stage_socket.py`: Modal H100 runner for the three-stage pretrained socket test.
@@ -221,6 +225,7 @@ The next target is publication: push the repo to GitHub, then publish the artifa
 - `results/tight_summon_frontier_snapshot_2026-05-14.md`: tight-shortlist quality and million-token speed frontier snapshot.
 - `results/compact_summon_frontier_snapshot_2026-05-14.md`: compact coarse-code quality and million-token speed frontier snapshot.
 - `results/artifact_export_snapshot_2026-05-14.md`: first local deployable SVA artifact export snapshot.
+- `results/production_adapter_snapshot_2026-05-14.md`: first production-facing adapter and local chat demo snapshot.
 - `results/hf_artifacts/sva-smollm2-135m-2x256-v1/`: local HF/GitHub-ready `2x256` SVA artifact bundle.
 - `notes/attention_replacement_findings.md`: broader research log leading to SVA.
 - `notes/hierarchical_tree_sva.md`: side-track notes for hierarchical chunk/tree SVA.
