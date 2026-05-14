@@ -72,6 +72,8 @@ Product-quantized learned-score lookup is the new best serving signal. The exact
 
 The first synthetic million-token throughput check is plausible but still costly if used everywhere. On H100 with stock PyTorch gather plus top-k, `8 x 256` PQ over 9 heads scanned one million keys in about `2.2 ms` for one query; `16 x 256` took about `4.5 ms`. The next target is coarse-to-fine PQ so the full scan can be cheaper and the high-quality score only runs on a shortlist.
 
+Coarse-to-fine PQ preserved the fine-PQ signal. On held-out reversed 8192-token SmolLM2 streams, `4x64` coarse PQ shortlisting to `4096`, then `16x256` fine PQ and a `512` verifier budget, reached `0.799541` aggregate top-16 recall versus `0.801169` for full `16x256` fine-PQ scoring. With a `2048` shortlist it reached `0.789078`. The next check measures the staged path directly at one million keys.
+
 ## Files
 
 - `experiments/sva_kill_test.py`: standalone toy benchmark.
@@ -88,6 +90,7 @@ The first synthetic million-token throughput check is plausible but still costly
 - `experiments/sva_pq_lookup_test.py`: product-quantized learned-ranker lookup test.
 - `experiments/sva_pq_scan_benchmark.py`: synthetic million-token PQ scan throughput benchmark.
 - `experiments/sva_coarse_to_fine_pq_test.py`: coarse-to-fine product-quantized lookup test.
+- `experiments/sva_coarse_to_fine_pq_scan_benchmark.py`: synthetic million-token coarse-to-fine PQ scan throughput benchmark.
 - `experiments/sva_address_scaling.py`: address selectivity calculator for long contexts.
 - `modal_h100_trainable.py`: Modal H100 runner for the trainable benchmark.
 - `modal_h100_socket.py`: Modal H100 runner for the pretrained socket sweep.
@@ -102,6 +105,7 @@ The first synthetic million-token throughput check is plausible but still costly
 - `modal_h100_pq_lookup.py`: Modal H100 runner for product-quantized learned-ranker lookup.
 - `modal_h100_pq_scan_benchmark.py`: Modal H100 runner for PQ scan throughput.
 - `modal_h100_coarse_to_fine_pq.py`: Modal H100 runner for coarse-to-fine PQ lookup.
+- `modal_h100_coarse_to_fine_pq_scan_benchmark.py`: Modal H100 runner for coarse-to-fine PQ scan throughput.
 - `scripts/start_modal_h100_background.ps1`: detached Modal launcher that writes run logs under `results/modal_runs/`.
 - `results/verification_snapshot_2026-05-13.md`: current kill-test results.
 - `results/trainable_recall_snapshot_2026-05-13.md`: H100 trainable-representation checkpoint.
@@ -119,6 +123,7 @@ The first synthetic million-token throughput check is plausible but still costly
 - `results/supervised_query_router_hires_snapshot_2026-05-13.md`: high-resolution supervised query-cell router lookup snapshot.
 - `results/pq_lookup_snapshot_2026-05-13.md`: product-quantized learned-ranker lookup snapshot.
 - `results/pq_scan_benchmark_snapshot_2026-05-13.md`: synthetic million-token PQ scan throughput snapshot.
+- `results/coarse_to_fine_pq_snapshot_2026-05-13.md`: coarse-to-fine PQ lookup snapshot.
 - `notes/attention_replacement_findings.md`: broader research log leading to SVA.
 - `notes/million_token_scaling.md`: scaling target for million-token contexts.
 
@@ -138,6 +143,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_bac
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-pq-lookup -ModalFile modal_h100_pq_lookup.py
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-pq-scan-benchmark -ModalFile modal_h100_pq_scan_benchmark.py
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-coarse-to-fine-pq -ModalFile modal_h100_coarse_to_fine_pq.py
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-coarse-to-fine-pq-scan-benchmark -ModalFile modal_h100_coarse_to_fine_pq_scan_benchmark.py
 ```
 
 The launcher uses `modal run --detach` and writes local metadata, stdout, stderr, and result files under `results/modal_runs/`.
