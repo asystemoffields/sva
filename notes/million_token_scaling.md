@@ -70,6 +70,8 @@ The prefill-drift benchmark confirms that diagnosis. At `32768`, first-answer-to
 
 Layer-selective prefill drift gives a better socketing target. At `32768`, strong attention all-layer SVA had first-answer-token NLL delta `0.992831` and KL `2.148224`. Socketing only layers `20-29` cut that to `0.035455` NLL delta and `0.019850` KL, while preserving top-1 agreement and reaching logit cosine `0.999362`. The current quality path is late-layer SVA socketing plus a faster indexed summon path.
 
+The full answer test confirms the `late10` direction at `32768`. All-layer SVA had answer NLL delta `0.152243`, KL `1.560773`, and logit cosine `0.744593`; `late10` reached answer NLL delta `-0.001995`, KL `0.028690`, and logit cosine `0.999246`. This makes late-layer SVA the current socket candidate for 32K quality, while scan prefill remains the implementation bottleneck.
+
 ## Million-Token Constraint
 
 At a 1,000,000-token context, average prefix length is about 500,000. A usable replacement should keep exact full-dimensional QK scoring in the rough range of 128 to 1024 candidates per query.
@@ -141,8 +143,8 @@ The important refinement is distribution matching. High code entropy can coincid
 
 The next architectural test is layer-selective answer quality:
 
-- run full passkey answer scoring for all-layer, `sparse6`, and `late10`
+- sweep `late4`, `late6`, `late8`, `late10`, `late12`, and `late15`
 - keep strong attention as the current long-context profile
-- treat `late10` as the first production-shaped socket candidate if answer NLL/KL follows the prefill result
+- identify the smallest late-layer socket that preserves 32K answer distribution
 - track recall, evidence survival, answer NLL, score distortion, normalized code entropy, max code load, value reads, and wall time
 - keep replacing scan prefill with indexed/elevator summon

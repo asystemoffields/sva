@@ -152,6 +152,8 @@ The prefill-drift benchmark confirms the long-context failure mode. At `32768`, 
 
 Layer-selective prefill drift gives the strongest socketing signal so far. With the strong attention-weighted profile at `32768`, all-layer SVA had first-answer-token NLL delta `0.992831` and KL `2.148224`. Socketing only layers `20-29` cut that to NLL delta `0.035455` and KL `0.019850`, with full top-1 agreement and logit cosine `0.999362`. The next check is the full answer benchmark for `late10`, because the current signal is at the final prompt position before multi-token answer decode.
 
+The full answer test transfers the `late10` signal. At `32768`, all-layer SVA had answer NLL delta `0.152243`, KL `1.560773`, and logit cosine `0.744593`. The `late10` socket reached answer NLL delta `-0.001995`, KL `0.028690`, and logit cosine `0.999246`, while keeping the SVA-layer exact read reduction at `16x`. At `16384`, `sparse6` was best on gold answer NLL, while `late10` was best on distribution preservation, so the next run is a late-layer boundary sweep.
+
 ## Files
 
 - `experiments/sva_kill_test.py`: standalone toy benchmark.
@@ -227,6 +229,7 @@ Layer-selective prefill drift gives the strongest socketing signal so far. With 
 - `modal_h100_passkey_prefill_drift_profiles.py`: Modal H100 runner for profile-by-profile passkey prefill-drift diagnostics.
 - `modal_h100_passkey_layer_selective_prefill.py`: Modal H100 runner for layer-selective passkey prefill-drift sweeps.
 - `modal_h100_passkey_layer_selective_language.py`: Modal H100 runner for layer-selective passkey answer sweeps.
+- `modal_h100_passkey_late_boundary_language.py`: Modal H100 runner for late-layer passkey answer boundary sweeps.
 - `modal_h100_block_elevator.py`: Modal H100 runner for block-first SVA elevator benchmarking.
 - `modal_h100_block_hybrid.py`: Modal H100 runner for token/block hybrid SVA benchmarking.
 - `modal_h100_learned_hybrid_selector.py`: Modal H100 runner for learned token/block selector benchmarking.
@@ -319,6 +322,7 @@ Layer-selective prefill drift gives the strongest socketing signal so far. With 
 - `results/passkey_key_survival_profiles_snapshot_2026-05-14.md`: final-query passkey evidence survival across routed profiles.
 - `results/passkey_prefill_drift_profiles_snapshot_2026-05-14.md`: final-prompt passkey prefill drift across routed profiles.
 - `results/passkey_layer_selective_prefill_snapshot_2026-05-14.md`: layer-selective final-prompt passkey prefill drift.
+- `results/passkey_layer_selective_language_snapshot_2026-05-14.md`: layer-selective full-answer passkey scoring.
 - `results/hf_artifacts/sva-smollm2-135m-2x256-v1/`: local HF/GitHub-ready `2x256` SVA artifact bundle.
 - `results/hf_artifacts/sva-smollm2-135m-2x256-longctx-refresh-v1/`: local HF/GitHub-ready long-context refreshed `2x256` SVA artifact bundle.
 - `results/hf_artifacts/sva-smollm2-135m-2x256-attnweighted-v1/`: local HF/GitHub-ready attention-weighted long-context `2x256` SVA artifact bundle.
@@ -387,6 +391,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_bac
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-passkey-prefill-drift-profiles -ModalFile modal_h100_passkey_prefill_drift_profiles.py
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-passkey-layer-selective-prefill -ModalFile modal_h100_passkey_layer_selective_prefill.py
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-passkey-layer-selective-language -ModalFile modal_h100_passkey_layer_selective_language.py
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-passkey-late-boundary-language -ModalFile modal_h100_passkey_late_boundary_language.py
 ```
 
 The launcher uses `modal run --detach` and writes local metadata, stdout, stderr, and result files under `results/modal_runs/`.
