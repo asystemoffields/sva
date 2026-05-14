@@ -120,7 +120,9 @@ The first long-context extension proxy found the current boundary. With the froz
 
 The first language-level passkey benchmark is a sharper stress test. With the passkey at the beginning and the query at the end, adaptive inverted decode was too aggressive: at `4096` tokens it added `3.776614` answer NLL versus full attention while verifying about `32` tokens per decode query. Fixed scan decode with `2048/512` recovered the short-context behavior: answer NLL deltas were `0.076570` at `4096` and `0.163233` at `8192`, with `8x` and `16x` fewer value reads. Scaling to `8192/2048` recovered the longer rows too: answer NLL delta was `-0.016004` at `16384` and `0.116894` at `32768`, with `8x` and `16x` fewer value reads. Exact-string retrieval looks like a budget-policy problem through 32k, while the current prefill path remains the obvious systems bottleneck.
 
-The next target is a serving-shaped passkey benchmark: preserve the `8192/2048` quality while reducing prefill and decode cost. In parallel, the method target is a richer catalog: multi-scale codes, layer-aware budgets, and shortlist objectives trained for exact-token survival at the target context scale.
+The first block-elevator benchmark tested a more kernel-shaped SVA path: summon contiguous blocks, then let selected blocks compute exact local softmax partials where they sit. Averaged over layers `0`, `15`, and `29`, token SVA with `2048` individual value reads fell to `output_cosine=0.943327` and `relative_error=0.456380` at `131072` synthetic tokens. Centroid block SVA with the same `2048` value reads reached `output_cosine=0.966790` and `relative_error=0.276183`, while reducing scattered segments from `2048` tokens to `32` contiguous blocks. At `8192`, token SVA remains stronger; at longer contexts, block statements look like a useful way to preserve diffuse value output.
+
+The next target is a hybrid serving-shaped passkey benchmark: preserve the `8192/2048` exact-string quality while testing when token SVA should hand off to block elevator SVA. In parallel, the method target is a richer catalog: multi-scale codes, layer-aware budgets, shortlist objectives trained for exact-token survival, and confidence features that choose token or block mode per layer, head, query, and context length.
 
 ## Files
 
@@ -149,6 +151,7 @@ The next target is a serving-shaped passkey benchmark: preserve the `8192/2048` 
 - `experiments/sva_inverted_adaptive_decode_benchmark.py`: cached-decode benchmark for inverted-code adaptive SVA lookup.
 - `experiments/sva_long_context_recall_sim.py`: long-context SVA recall proxy from real SmolLM2 Q/K activations and synthetic larger key banks.
 - `experiments/sva_passkey_language_benchmark.py`: passkey-style long-context language benchmark scoring the correct answer tokens after cached prefill.
+- `experiments/sva_block_elevator_benchmark.py`: block-first SVA benchmark that summons contiguous blocks and merges local softmax statements.
 - `experiments/sva_artifact_io.py`: save/load helpers for portable frozen SVA artifact bundles.
 - `experiments/export_sva_artifact.py`: exporter for HF/GitHub-ready SVA artifact folders.
 - `experiments/sva_address_scaling.py`: address selectivity calculator for long contexts.
@@ -180,6 +183,7 @@ The next target is a serving-shaped passkey benchmark: preserve the `8192/2048` 
 - `modal_h100_passkey_language.py`: Modal H100 runner for adaptive inverted passkey language benchmarking.
 - `modal_h100_passkey_language_scan.py`: Modal H100 runner for fixed-scan passkey language benchmarking.
 - `modal_h100_passkey_language_scaleout.py`: Modal H100 runner for passkey shortlist and budget scale-out.
+- `modal_h100_block_elevator.py`: Modal H100 runner for block-first SVA elevator benchmarking.
 - `modal_h100_million_stream.py`: Modal H100 runner for the million-token address-pressure simulation.
 - `modal_h100_learned_ranker.py`: Modal H100 runner for the learned compressed-ranker test.
 - `modal_h100_learned_ranker_generalize.py`: Modal H100 runner for the held-out-text ranker test.
@@ -246,6 +250,7 @@ The next target is a serving-shaped passkey benchmark: preserve the `8192/2048` 
 - `results/production_adapter_snapshot_2026-05-14.md`: first production-facing adapter and local chat demo snapshot.
 - `results/long_context_extension_snapshot_2026-05-14.md`: 8k head-to-head plus 128k/1M long-context recall extension snapshot.
 - `results/passkey_language_snapshot_2026-05-14.md`: first passkey-style language stress test for SVA decode policy.
+- `results/block_elevator_snapshot_2026-05-14.md`: block-first SVA elevator and local statement benchmark snapshot.
 - `results/hf_artifacts/sva-smollm2-135m-2x256-v1/`: local HF/GitHub-ready `2x256` SVA artifact bundle.
 - `notes/attention_replacement_findings.md`: broader research log leading to SVA.
 - `notes/hierarchical_tree_sva.md`: side-track notes for hierarchical chunk/tree SVA.
@@ -293,6 +298,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_bac
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-tight-summon-frontier -ModalFile modal_h100_tight_summon_frontier.py
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-compact-summon-frontier -ModalFile modal_h100_compact_summon_frontier.py
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-export-artifact -ModalFile modal_h100_export_sva_artifact.py
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-block-elevator -ModalFile modal_h100_block_elevator.py
 ```
 
 The launcher uses `modal run --detach` and writes local metadata, stdout, stderr, and result files under `results/modal_runs/`.
