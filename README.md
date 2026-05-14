@@ -72,7 +72,9 @@ Product-quantized learned-score lookup is the new best serving signal. The exact
 
 The first synthetic million-token throughput check is plausible but still costly if used everywhere. On H100 with stock PyTorch gather plus top-k, `8 x 256` PQ over 9 heads scanned one million keys in about `2.2 ms` for one query; `16 x 256` took about `4.5 ms`. The next target is coarse-to-fine PQ so the full scan can be cheaper and the high-quality score only runs on a shortlist.
 
-Coarse-to-fine PQ preserved the fine-PQ signal. On held-out reversed 8192-token SmolLM2 streams, `4x64` coarse PQ shortlisting to `4096`, then `16x256` fine PQ and a `512` verifier budget, reached `0.799541` aggregate top-16 recall versus `0.801169` for full `16x256` fine-PQ scoring. With a `2048` shortlist it reached `0.789078`. The next check measures the staged path directly at one million keys.
+Coarse-to-fine PQ preserved the fine-PQ signal. On held-out reversed 8192-token SmolLM2 streams, `4x64` coarse PQ shortlisting to `4096`, then `16x256` fine PQ and a `512` verifier budget, reached `0.799541` aggregate top-16 recall versus `0.801169` for full `16x256` fine-PQ scoring. With a `2048` shortlist it reached `0.789078`.
+
+The staged path is also fast in the first direct million-token benchmark. On H100 with stock PyTorch gather plus top-k, `4x64 -> 16x256` coarse-to-fine PQ took about `1.91 ms` for one query and about `3.03 ms` for four queries over one million keys and 9 heads. That is faster than the previous full `8x256` scan while preserving nearly all of the full `16x256` fine-PQ recall at the larger shortlist. The next target is training the coarse stage against the fine-PQ winners so the `1024-2048` shortlist range can carry the same recall.
 
 ## Files
 
@@ -124,6 +126,7 @@ Coarse-to-fine PQ preserved the fine-PQ signal. On held-out reversed 8192-token 
 - `results/pq_lookup_snapshot_2026-05-13.md`: product-quantized learned-ranker lookup snapshot.
 - `results/pq_scan_benchmark_snapshot_2026-05-13.md`: synthetic million-token PQ scan throughput snapshot.
 - `results/coarse_to_fine_pq_snapshot_2026-05-13.md`: coarse-to-fine PQ lookup snapshot.
+- `results/coarse_to_fine_pq_scan_benchmark_snapshot_2026-05-13.md`: synthetic million-token coarse-to-fine PQ scan throughput snapshot.
 - `notes/attention_replacement_findings.md`: broader research log leading to SVA.
 - `notes/million_token_scaling.md`: scaling target for million-token contexts.
 
