@@ -134,6 +134,8 @@ The span-statement test confirms that local statements are a useful verifier sha
 
 The rotation diagnostic found a large codebook-quality opening. Against the frozen artifact codebooks, aggregate teacher top-16 recall was `0.771888` at budget `512`, `0.837511` at `1024`, and `0.893808` at `2048`. Refit codebooks lifted those to `0.837637`, `0.884145`, and `0.923472`, while raising PQ score cosine from `0.870095` to about `0.9576`. Hadamard and signed-Hadamard refits were essentially tied with plain refit, so the next deployable test is held-out calibration-time codebook refresh rather than relying on eval-key refit.
 
+Held-out codebook refresh confirmed that the codebook-quality opening generalizes. At `32768`, the frozen artifact reached teacher top-16 recall `0.563169/0.657407/0.752450` at budgets `512/1024/2048`. Calibration-fit codebooks lifted those to `0.635887/0.726002/0.809995`, close to the eval-refit upper bound `0.645553/0.734592/0.816090`. The catalog-quality signal is Shannon-shaped: normalized code entropy rose from `0.718895` to about `0.978`, while the largest average code bucket fell from `0.230200` to about `0.0144`. At `8192`, the frozen artifact remains best, so the next deployable shape is context-matched profiles plus a simple context-length router.
+
 ## Files
 
 - `experiments/sva_kill_test.py`: standalone toy benchmark.
@@ -167,6 +169,7 @@ The rotation diagnostic found a large codebook-quality opening. Against the froz
 - `experiments/sva_evidence_haystack_benchmark.py`: passkey evidence survival benchmark that measures whether the summoner keeps the needed tokens as context grows, with optional anchor-aware rerank and neighborhood expansion.
 - `experiments/sva_span_statement_benchmark.py`: passkey span-statement benchmark that opens local spans around summoned evidence and compares selected-span output with full attention.
 - `experiments/sva_rotation_diagnostic.py`: low-rank rotation diagnostic that compares frozen product codebooks with refit identity and Hadamard-style codebooks.
+- `experiments/sva_codebook_refresh_benchmark.py`: held-out calibration-time codebook refresh benchmark for context-matched SVA catalogs.
 - `experiments/sva_artifact_io.py`: save/load helpers for portable frozen SVA artifact bundles.
 - `experiments/export_sva_artifact.py`: exporter for HF/GitHub-ready SVA artifact folders.
 - `experiments/sva_address_scaling.py`: address selectivity calculator for long contexts.
@@ -205,6 +208,7 @@ The rotation diagnostic found a large codebook-quality opening. Against the froz
 - `modal_h100_evidence_rerank.py`: Modal H100 runner for evidence-aware rerank and neighborhood-expansion benchmarking.
 - `modal_h100_span_statement.py`: Modal H100 runner for passkey span-statement benchmarking.
 - `modal_h100_rotation_diagnostic.py`: Modal H100 runner for low-rank rotation diagnostics.
+- `modal_h100_codebook_refresh.py`: Modal H100 runner for held-out calibration-time codebook refresh.
 - `modal_h100_million_stream.py`: Modal H100 runner for the million-token address-pressure simulation.
 - `modal_h100_learned_ranker.py`: Modal H100 runner for the learned compressed-ranker test.
 - `modal_h100_learned_ranker_generalize.py`: Modal H100 runner for the held-out-text ranker test.
@@ -278,6 +282,7 @@ The rotation diagnostic found a large codebook-quality opening. Against the froz
 - `results/evidence_rerank_snapshot_2026-05-14.md`: evidence-aware rerank and neighborhood-expansion snapshot.
 - `results/span_statement_snapshot_2026-05-14.md`: span-statement verifier benchmark snapshot.
 - `results/rotation_diagnostic_snapshot_2026-05-14.md`: low-rank rotation and codebook-fit diagnostic snapshot.
+- `results/codebook_refresh_snapshot_2026-05-14.md`: held-out calibration-time codebook refresh snapshot.
 - `results/hf_artifacts/sva-smollm2-135m-2x256-v1/`: local HF/GitHub-ready `2x256` SVA artifact bundle.
 - `notes/attention_replacement_findings.md`: broader research log leading to SVA.
 - `notes/hierarchical_tree_sva.md`: side-track notes for hierarchical chunk/tree SVA.
@@ -332,6 +337,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_bac
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-evidence-rerank -ModalFile modal_h100_evidence_rerank.py
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-span-statement -ModalFile modal_h100_span_statement.py
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-rotation-diagnostic -ModalFile modal_h100_rotation_diagnostic.py
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-codebook-refresh -ModalFile modal_h100_codebook_refresh.py
 ```
 
 The launcher uses `modal run --detach` and writes local metadata, stdout, stderr, and result files under `results/modal_runs/`.

@@ -52,6 +52,8 @@ The span-statement branch is now measured. At `8192`, radius `32` improved aggre
 
 The rotation diagnostic found a large codebook-quality opening. At budgets `512/1024/2048`, frozen artifact codebooks reached aggregate teacher top-16 recall `0.771888/0.837511/0.893808`; refit codebooks reached `0.837637/0.884145/0.923472`. PQ score cosine rose from `0.870095` to about `0.9576`, and code entropy rose from `0.812974` to about `0.986`. Hadamard and signed-Hadamard refits were close to plain refit, so the immediate win is better codebook fit and balance. The next test should train identity and signed-Hadamard codebooks on separate calibration streams, then evaluate held-out long-context recall.
 
+Held-out codebook refresh confirmed the codebook-quality opening. At `32768`, the frozen artifact reached teacher top-16 recall `0.563169/0.657407/0.752450` at budgets `512/1024/2048`; calibration-fit codebooks lifted those to `0.635887/0.726002/0.809995`, close to the eval-key refit upper bound `0.645553/0.734592/0.816090`. The Shannon-style diagnostic is clear: normalized code entropy rose from `0.718895` to about `0.978`, and the largest average code bucket fell from `0.230200` to about `0.0144`. At `8192`, the frozen artifact remains best, which points to context-matched catalog profiles rather than one global codebook.
+
 ## Million-Token Constraint
 
 At a 1,000,000-token context, average prefix length is about 500,000. A usable replacement should keep exact full-dimensional QK scoring in the rough range of 128 to 1024 candidates per query.
@@ -94,23 +96,37 @@ The likely million-token shape is a three-stage SVA stack:
    - Current ranking signal: learned low-rank Q/K projection.
    - Current best serving target: product-quantized learned Q/K scoring.
    - Good serving candidates: coarse-to-fine PQ, asymmetric compressed scoring, or an ANN index over compressed keys.
+   - Track catalog capacity with normalized code entropy, max code load, and score distortion.
 
 3. Exact verifier
    - Run full QK only over the reduced candidate set.
    - Use the original V/O path so the socket remains close to a drop-in attention replacement.
 
+4. Context-matched catalog profiles
+   - Keep the strong 8k artifact profile for ordinary context.
+   - Use calibration-refreshed long-context profiles when the served context crosses the 16k/32k range.
+   - Route by context length first, then later by measured per-layer catalog statistics.
+
 ## Key Risk
 
 The 512-token prefilter sweep showed that random low-dimensional ranking is too blunt when pushed hard. It can cut exact scoring, but it loses top-key recall before the quality loss is acceptable at longer context.
 
-So the next invention target is the cheap ranker. The summon stage already finds the right broad neighborhood; the ranker has to preserve the top full-attention keys while shrinking exact scoring by another factor.
+So the next invention target is the cheap ranker and its catalog. The summon stage has to preserve the top full-attention keys while shrinking exact scoring by another factor, and the catalog needs enough effective entropy that increasing context length does not collapse many useful keys into the same overloaded codes.
+
+The current working formula is:
+
+```text
+teacher_recall = f(context_length, verifier_budget, score_cosine, score_mse, normalized_code_entropy, max_code_fraction)
+```
+
+The important refinement is distribution matching. High code entropy is useful when it is measured on the distribution being served; a 32k-calibrated catalog can improve 16k/32k recall while giving back some of the 8k artifact's advantage.
 
 ## Next Verification Step
 
-The next architectural test is efficient serving for the learned ranker:
+The next architectural test is context-matched serving for the learned ranker:
 
 - keep the exact verifier unchanged
-- convert the rank-64 score into a true addressable lookup without random sign buckets or unsupervised centroid cells
-- test coarse-to-fine PQ over compressed keys
-- keep the target at top-16 recall above `0.75` and verifier budget at or below `512`
-- rerun the million-token pressure simulation with empirical candidate density
+- export a calibration-refreshed long-context `2x256` profile
+- compare the current 8k artifact, the refreshed long-context profile, and a context-length router
+- track recall, score distortion, normalized code entropy, max code load, value reads, and wall time
+- rerun the passkey and long-context recall benchmarks with the selected profile
