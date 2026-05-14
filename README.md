@@ -148,6 +148,8 @@ The mixed-strength attention-weighted sweep sharpened the diagnosis. Boost `2` i
 
 The passkey key-survival diagnostic points to prefill drift. At `32768`, final-query key survival is low for every profile but close across profiles: original `0.148148`, plain refresh `0.137037`, boost2 `0.133333`, strong attention `0.140741`. Since verified survival equals summoned survival in this setup, the final-query loss is summon-side, but the profile differences are too small to explain the larger language NLL spread. The next sharp move is measuring full-vs-SVA prefill drift directly: first answer-token NLL, final-prompt logit KL/cosine, and profile-specific prefill stats.
 
+The prefill-drift benchmark confirms the long-context failure mode. At `32768`, first-answer-token NLL deltas before decoding were already large: original `1.037624`, plain refresh `1.684878`, boost2 `2.515614`, and strong attention `0.992831`. Strong attention has the best 32K final-prompt logit cosine (`0.970458`), but KL remains high (`2.148224`). The next implementation target is layer-selective socketing in the production adapter, so fragile layers can stay full attention while tolerant layers use SVA.
+
 ## Files
 
 - `experiments/sva_kill_test.py`: standalone toy benchmark.
@@ -220,6 +222,7 @@ The passkey key-survival diagnostic points to prefill drift. At `32768`, final-q
 - `modal_h100_passkey_attention_weighted_router.py`: Modal H100 runner for passkey language tests with the attention-weighted long-context profile.
 - `modal_h100_attention_weighted_router_sweep.py`: Modal H100 runner for attention-weighted boost export plus passkey router sweeps.
 - `modal_h100_passkey_key_survival_profiles.py`: Modal H100 runner for profile-by-profile passkey key-survival diagnostics.
+- `modal_h100_passkey_prefill_drift_profiles.py`: Modal H100 runner for profile-by-profile passkey prefill-drift diagnostics.
 - `modal_h100_block_elevator.py`: Modal H100 runner for block-first SVA elevator benchmarking.
 - `modal_h100_block_hybrid.py`: Modal H100 runner for token/block hybrid SVA benchmarking.
 - `modal_h100_learned_hybrid_selector.py`: Modal H100 runner for learned token/block selector benchmarking.
@@ -310,6 +313,7 @@ The passkey key-survival diagnostic points to prefill drift. At `32768`, final-q
 - `results/passkey_attention_weighted_router_snapshot_2026-05-14.md`: language-facing passkey test for the attention-weighted routed profile.
 - `results/attention_weighted_router_sweep_snapshot_2026-05-14.md`: mixed-strength attention-weighted routed profile sweep.
 - `results/passkey_key_survival_profiles_snapshot_2026-05-14.md`: final-query passkey evidence survival across routed profiles.
+- `results/passkey_prefill_drift_profiles_snapshot_2026-05-14.md`: final-prompt passkey prefill drift across routed profiles.
 - `results/hf_artifacts/sva-smollm2-135m-2x256-v1/`: local HF/GitHub-ready `2x256` SVA artifact bundle.
 - `results/hf_artifacts/sva-smollm2-135m-2x256-longctx-refresh-v1/`: local HF/GitHub-ready long-context refreshed `2x256` SVA artifact bundle.
 - `results/hf_artifacts/sva-smollm2-135m-2x256-attnweighted-v1/`: local HF/GitHub-ready attention-weighted long-context `2x256` SVA artifact bundle.
@@ -375,6 +379,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_bac
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-passkey-attnweighted-router -ModalFile modal_h100_passkey_attention_weighted_router.py
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-attnweighted-router-sweep -ModalFile modal_h100_attention_weighted_router_sweep.py
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-passkey-key-survival-profiles -ModalFile modal_h100_passkey_key_survival_profiles.py
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-passkey-prefill-drift-profiles -ModalFile modal_h100_passkey_prefill_drift_profiles.py
 ```
 
 The launcher uses `modal run --detach` and writes local metadata, stdout, stderr, and result files under `results/modal_runs/`.

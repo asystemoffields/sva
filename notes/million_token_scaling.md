@@ -66,6 +66,8 @@ The mixed-strength attention-weighted sweep says the `32768` issue is not solved
 
 The final-query passkey key-survival diagnostic found low but similar survival across profiles at `32768`: original `0.148148`, plain refresh `0.137037`, boost2 `0.133333`, strong attention `0.140741`. Verified survival equals summoned survival, so the measured final-query loss is summon-side. The profile differences are too small to explain the language NLL spread, which points to accumulated prefill drift rather than only final-query evidence retrieval.
 
+The prefill-drift benchmark confirms that diagnosis. At `32768`, first-answer-token NLL deltas before decoding were original `1.037624`, plain refresh `1.684878`, boost2 `2.515614`, and strong attention `0.992831`. Strong attention kept high final-prompt logit cosine (`0.970458`) but still had high KL (`2.148224`). All-layer SVA is accumulating representation drift over the prompt.
+
 ## Million-Token Constraint
 
 At a 1,000,000-token context, average prefix length is about 500,000. A usable replacement should keep exact full-dimensional QK scoring in the rough range of 128 to 1024 candidates per query.
@@ -135,11 +137,11 @@ The important refinement is distribution matching. High code entropy can coincid
 
 ## Next Verification Step
 
-The next architectural test is passkey prefill drift:
+The next architectural test is layer-selective prefill drift:
 
-- compare full vs SVA logits at the final prompt position before decoding
-- separate first-token answer NLL from later decode-token NLL
-- compare original, plain refreshed, boost2 attention-weighted, and strong attention-weighted profiles at `16384/32768`
-- keep prefill stats beside logit KL/cosine so representation drift can be separated from final-query summon loss
+- add layer-selective runtime patching to the production adapter
+- sweep 32K passkey prefill drift over layer groups
+- identify fragile layers that should stay full-attention
+- keep strong attention as the best current long-context profile, but test it selectively rather than all-layer
 - track recall, evidence survival, answer NLL, score distortion, normalized code entropy, max code load, value reads, and wall time
 - keep replacing scan prefill with indexed/elevator summon
