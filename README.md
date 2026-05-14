@@ -172,6 +172,7 @@ Held-out codebook refresh confirmed that the codebook-quality opening generalize
 - `experiments/sva_codebook_refresh_benchmark.py`: held-out calibration-time codebook refresh benchmark for context-matched SVA catalogs.
 - `experiments/sva_artifact_io.py`: save/load helpers for portable frozen SVA artifact bundles.
 - `experiments/export_sva_artifact.py`: exporter for HF/GitHub-ready SVA artifact folders.
+- `experiments/export_refreshed_sva_artifact.py`: exporter that refreshes artifact coarse codebooks on a calibration stream while preserving the trained low-rank projections.
 - `experiments/sva_address_scaling.py`: address selectivity calculator for long contexts.
 - `sva/`: production-facing artifact loader and Llama attention adapter.
 - `demo/local_chat_server.py`: local HTML chat UI for SmolLM2 running with the exported SVA artifact.
@@ -193,6 +194,7 @@ Held-out codebook refresh confirmed that the codebook-quality opening generalize
 - `modal_h100_tight_summon_frontier.py`: Modal H100 runner for the tight-shortlist quality/speed frontier.
 - `modal_h100_compact_summon_frontier.py`: Modal H100 runner for compact coarse-code quality/speed frontier sweeps.
 - `modal_h100_export_sva_artifact.py`: Modal H100 runner that exports the default `2x256` SVA artifact bundle to a Modal volume.
+- `modal_h100_export_refreshed_artifact.py`: Modal H100 runner that exports a long-context calibration-refreshed artifact bundle.
 - `modal_h100_8k_head_to_head.py`: Modal H100 runner for the 8k head-to-head deployment benchmark.
 - `modal_h100_inverted_adaptive_decode.py`: Modal H100 runner for adaptive inverted-code decode benchmarking.
 - `modal_h100_inverted_posting_decode.py`: Modal H100 runner for cached posting-list decode benchmarking.
@@ -330,6 +332,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_bac
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-tight-summon-frontier -ModalFile modal_h100_tight_summon_frontier.py
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-compact-summon-frontier -ModalFile modal_h100_compact_summon_frontier.py
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-export-artifact -ModalFile modal_h100_export_sva_artifact.py
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-export-refreshed-artifact -ModalFile modal_h100_export_refreshed_artifact.py
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-block-elevator -ModalFile modal_h100_block_elevator.py
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-block-hybrid -ModalFile modal_h100_block_hybrid.py
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-learned-hybrid-selector -ModalFile modal_h100_learned_hybrid_selector.py
