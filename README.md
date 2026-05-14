@@ -130,6 +130,8 @@ The evidence-haystack benchmark now measures summon quality directly. Multi-anch
 
 The evidence-aware rerank sweep found a method-level improvement and a sharper next target. At `16384`, current-query rerank plus radius `32` lifted aggregate verified key survival from `0.461420` to `0.614198` while keeping average exact score work below full attention. At `32768`, expansion lifted aggregate candidate key coverage to `0.601852`, but verified key survival reached only `0.307098`; individual-token rerank is now the main loss point. The next test is span/block statements that preserve local evidence neighborhoods after summon.
 
+The current span-statement test is staged. It opens local spans around summoned tokens, compares selected-span output against full attention, and tracks evidence survival, value reads, exact score work, and contiguous segment count. A rotation follow-up is also queued: Hadamard-style or learned orthogonal preconditioning before catalog/codebook assignment may make the low-rank summon space less axis-fragile.
+
 ## Files
 
 - `experiments/sva_kill_test.py`: standalone toy benchmark.
@@ -161,6 +163,7 @@ The evidence-aware rerank sweep found a method-level improvement and a sharper n
 - `experiments/sva_block_hybrid_benchmark.py`: token/block hybrid benchmark that routes each head/query between scattered token SVA and contiguous block SVA.
 - `experiments/sva_learned_hybrid_selector_benchmark.py`: learned selector benchmark for token/block SVA routing from cheap pre-verifier features.
 - `experiments/sva_evidence_haystack_benchmark.py`: passkey evidence survival benchmark that measures whether the summoner keeps the needed tokens as context grows, with optional anchor-aware rerank and neighborhood expansion.
+- `experiments/sva_span_statement_benchmark.py`: passkey span-statement benchmark that opens local spans around summoned evidence and compares selected-span output with full attention.
 - `experiments/sva_artifact_io.py`: save/load helpers for portable frozen SVA artifact bundles.
 - `experiments/export_sva_artifact.py`: exporter for HF/GitHub-ready SVA artifact folders.
 - `experiments/sva_address_scaling.py`: address selectivity calculator for long contexts.
@@ -197,6 +200,7 @@ The evidence-aware rerank sweep found a method-level improvement and a sharper n
 - `modal_h100_learned_hybrid_selector.py`: Modal H100 runner for learned token/block selector benchmarking.
 - `modal_h100_evidence_haystack.py`: Modal H100 runner for passkey evidence survival benchmarking.
 - `modal_h100_evidence_rerank.py`: Modal H100 runner for evidence-aware rerank and neighborhood-expansion benchmarking.
+- `modal_h100_span_statement.py`: Modal H100 runner for passkey span-statement benchmarking.
 - `modal_h100_million_stream.py`: Modal H100 runner for the million-token address-pressure simulation.
 - `modal_h100_learned_ranker.py`: Modal H100 runner for the learned compressed-ranker test.
 - `modal_h100_learned_ranker_generalize.py`: Modal H100 runner for the held-out-text ranker test.
@@ -320,6 +324,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_bac
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-learned-hybrid-selector -ModalFile modal_h100_learned_hybrid_selector.py
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-evidence-haystack -ModalFile modal_h100_evidence_haystack.py
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-evidence-rerank -ModalFile modal_h100_evidence_rerank.py
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-span-statement -ModalFile modal_h100_span_statement.py
 ```
 
 The launcher uses `modal run --detach` and writes local metadata, stdout, stderr, and result files under `results/modal_runs/`.

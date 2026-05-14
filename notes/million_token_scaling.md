@@ -48,6 +48,10 @@ The synthetic million-token PQ scan benchmark showed plausible but nontrivial th
 
 The working conclusion is now sharper: the broad SVA socket works, and the learned low-rank Q/K score works as a compact ranking signal. Hard lookup cells have been weak, but score-preserving compressed scans can keep most of the learned-ranker signal at plausible primitive speed.
 
+Span statements are now the next evidence-preservation branch. Recent passkey evidence runs show that local neighborhoods can contain the needed evidence after summon while individual-token rerank drops it. The serving shape to test is: sparse summon, open small local spans, compute exact local statements in those spans, then merge the statements.
+
+Rotation is a live catalog-quality hypothesis. A Hadamard-style or learned orthogonal rotation before PQ/codebook assignment could spread out low-rank dimensions, reduce coordinate outliers, and make coarse cells more uniform. The direct test is to export a rotated artifact profile, rerun compact summon and evidence-haystack sweeps, and compare recall at the same shortlist and budget.
+
 ## Million-Token Constraint
 
 At a 1,000,000-token context, average prefix length is about 500,000. A usable replacement should keep exact full-dimensional QK scoring in the rough range of 128 to 1024 candidates per query.
