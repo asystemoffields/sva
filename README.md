@@ -76,6 +76,8 @@ Coarse-to-fine PQ preserved the fine-PQ signal. On held-out reversed 8192-token 
 
 The staged path is also fast in the first direct million-token benchmark. On H100 with stock PyTorch gather plus top-k, `4x64 -> 16x256` coarse-to-fine PQ took about `1.91 ms` for one query and about `3.03 ms` for four queries over one million keys and 9 heads. That is faster than the previous full `8x256` scan while preserving nearly all of the full `16x256` fine-PQ recall at the larger shortlist. The next target is training the coarse stage against the fine-PQ winners so the `1024-2048` shortlist range can carry the same recall.
 
+The first supervised coarse-stage attempt was a regression. Training a separate coarse ranker against the broad top-512 fine-PQ candidate set reached only `0.758293` aggregate recall at shortlist `4096`, below the unsupervised coarse-to-fine baseline's `0.803509`. The next test narrows the coarse target to attention top-16 labels.
+
 ## Files
 
 - `experiments/sva_kill_test.py`: standalone toy benchmark.
@@ -110,6 +112,7 @@ The staged path is also fast in the first direct million-token benchmark. On H10
 - `modal_h100_coarse_to_fine_pq.py`: Modal H100 runner for coarse-to-fine PQ lookup.
 - `modal_h100_coarse_to_fine_pq_scan_benchmark.py`: Modal H100 runner for coarse-to-fine PQ scan throughput.
 - `modal_h100_supervised_coarse_pq.py`: Modal H100 runner for supervised coarse-stage PQ lookup.
+- `modal_h100_supervised_coarse_pq_attention16.py`: Modal H100 runner for supervised coarse PQ with attention top-16 labels.
 - `scripts/start_modal_h100_background.ps1`: detached Modal launcher that writes run logs under `results/modal_runs/`.
 - `results/verification_snapshot_2026-05-13.md`: current kill-test results.
 - `results/trainable_recall_snapshot_2026-05-13.md`: H100 trainable-representation checkpoint.
@@ -129,6 +132,7 @@ The staged path is also fast in the first direct million-token benchmark. On H10
 - `results/pq_scan_benchmark_snapshot_2026-05-13.md`: synthetic million-token PQ scan throughput snapshot.
 - `results/coarse_to_fine_pq_snapshot_2026-05-13.md`: coarse-to-fine PQ lookup snapshot.
 - `results/coarse_to_fine_pq_scan_benchmark_snapshot_2026-05-13.md`: synthetic million-token coarse-to-fine PQ scan throughput snapshot.
+- `results/supervised_coarse_pq_snapshot_2026-05-13.md`: supervised coarse-stage PQ lookup snapshot.
 - `notes/attention_replacement_findings.md`: broader research log leading to SVA.
 - `notes/million_token_scaling.md`: scaling target for million-token contexts.
 
@@ -150,6 +154,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_bac
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-coarse-to-fine-pq -ModalFile modal_h100_coarse_to_fine_pq.py
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-coarse-to-fine-pq-scan-benchmark -ModalFile modal_h100_coarse_to_fine_pq_scan_benchmark.py
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-supervised-coarse-pq -ModalFile modal_h100_supervised_coarse_pq.py
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-supervised-coarse-pq-attention16 -ModalFile modal_h100_supervised_coarse_pq_attention16.py
 ```
 
 The launcher uses `modal run --detach` and writes local metadata, stdout, stderr, and result files under `results/modal_runs/`.
