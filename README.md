@@ -128,6 +128,8 @@ The learned selector is positive on held-out synthetic layer outputs. A tiny MLP
 
 The evidence-haystack benchmark now measures summon quality directly. Multi-anchor summon improves evidence survival: at `8192` start placement, full-budget anchors lift summoned key survival from `0.592593` with one anchor to `0.962963` with eight anchors, and at `32768` end placement from `0.222222` to `0.777778` with sixteen anchors. The next bottleneck is verifier rerank: at `32768` end placement the key is summoned in `0.777778` of head/layer cases but survives final verification in `0.444444`. Split-budget anchors are useful when evidence is close to the query: `8192` end placement kept exact key survival at `1.000000` while verifying about `435` tokens, an `18.8x` read reduction.
 
+The evidence-aware rerank sweep found a method-level improvement and a sharper next target. At `16384`, current-query rerank plus radius `32` lifted aggregate verified key survival from `0.461420` to `0.614198` while keeping average exact score work below full attention. At `32768`, expansion lifted aggregate candidate key coverage to `0.601852`, but verified key survival reached only `0.307098`; individual-token rerank is now the main loss point. The next test is span/block statements that preserve local evidence neighborhoods after summon.
+
 ## Files
 
 - `experiments/sva_kill_test.py`: standalone toy benchmark.
@@ -265,6 +267,7 @@ The evidence-haystack benchmark now measures summon quality directly. Multi-anch
 - `results/block_hybrid_snapshot_2026-05-14.md`: token/block hybrid selector benchmark snapshot.
 - `results/learned_hybrid_selector_snapshot_2026-05-14.md`: learned token/block selector benchmark snapshot.
 - `results/evidence_haystack_snapshot_2026-05-14.md`: passkey evidence survival benchmark snapshot.
+- `results/evidence_rerank_snapshot_2026-05-14.md`: evidence-aware rerank and neighborhood-expansion snapshot.
 - `results/hf_artifacts/sva-smollm2-135m-2x256-v1/`: local HF/GitHub-ready `2x256` SVA artifact bundle.
 - `notes/attention_replacement_findings.md`: broader research log leading to SVA.
 - `notes/hierarchical_tree_sva.md`: side-track notes for hierarchical chunk/tree SVA.
