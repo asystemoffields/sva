@@ -149,6 +149,18 @@ class SVALlamaAttention(nn.Module):
         if query_chunk_size is None:
             query_chunk_size = 128 if (q_len >= 4096 or actual_shortlist >= 2048) else q_len
 
+        if self.serving.summon_mode == "inverted_static" and q_len == 1:
+            return self._inverted_static_decode_attention(
+                query,
+                key_states,
+                value_states,
+                q_low,
+                k_low,
+                coarse_codes,
+                codebooks,
+                allowed,
+                actual_budget,
+            )
         if self.serving.summon_mode == "inverted" and q_len == 1:
             return self._inverted_decode_attention(
                 query,
@@ -161,7 +173,7 @@ class SVALlamaAttention(nn.Module):
                 allowed,
                 actual_budget,
             )
-        if self.serving.summon_mode not in {"scan", "inverted"}:
+        if self.serving.summon_mode not in {"scan", "inverted", "inverted_static"}:
             raise ValueError(f"Unknown SVA summon_mode: {self.serving.summon_mode!r}")
 
         output_chunks: list[torch.Tensor] = []
@@ -329,6 +341,116 @@ class SVALlamaAttention(nn.Module):
 
         return torch.stack(output_heads, dim=0)[None, :, None, :]
 
+    def _inverted_static_decode_attention(
+        self,
+        query: torch.Tensor,
+        key_states: torch.Tensor,
+        value_states: torch.Tensor,
+        q_low: torch.Tensor,
+        k_low: torch.Tensor,
+        coarse_codes: torch.Tensor,
+        codebooks: torch.Tensor,
+        allowed: torch.Tensor,
+        max_budget: int,
+    ) -> torch.Tensor:
+        batch, n_heads, q_len, head_dim = query.shape
+        k_len = key_states.shape[2]
+        if batch != 1 or q_len != 1:
+            raise ValueError("Static inverted SVA decode expects batch size 1 and q_len 1.")
+
+        min_budget = min(self.serving.adaptive_min_budget or max_budget, max_budget, k_len)
+        mid_budget = min(self.serving.adaptive_mid_budget or max(min_budget, max_budget // 2), max_budget, k_len)
+        max_budget = min(max_budget, k_len)
+        cells_per_subspace = min(self.serving.inverted_cells_per_subspace, int(codebooks.shape[2]))
+        subspaces = int(codebooks.shape[1])
+        sub_dim = self.serving.rank_dim // subspaces
+        if self._cached_postings is None or self._cached_posting_counts is None:
+            self._rebuild_postings(coarse_codes, int(codebooks.shape[2]))
+        assert self._cached_postings is not None
+        assert self._cached_posting_counts is not None
+
+        qh_low = q_low[0, :, 0].float()
+        q_parts = qh_low.reshape(n_heads, subspaces, sub_dim)
+        code_scores = torch.einsum("hsd,hscd->hsc", q_parts, codebooks.float()) / math.sqrt(self.serving.rank_dim)
+        top_cells = code_scores.topk(cells_per_subspace, dim=-1).indices
+
+        head_ids = torch.arange(n_heads, device=query.device)[:, None, None]
+        subspace_ids = torch.arange(subspaces, device=query.device)[None, :, None]
+        posting_lists = self._cached_postings[head_ids, subspace_ids, top_cells]
+        posting_counts = self._cached_posting_counts[head_ids, subspace_ids, top_cells]
+        slots = torch.arange(posting_lists.shape[-1], device=query.device)
+        posting_valid = slots[None, None, None, :] < posting_counts[..., None]
+
+        candidate_idx = posting_lists.reshape(n_heads, -1)
+        candidate_valid = posting_valid.reshape(n_heads, -1)
+        allowed_heads = allowed[0, :, 0]
+        candidate_valid = candidate_valid & allowed_heads.gather(dim=1, index=candidate_idx.clamp(0, k_len - 1))
+
+        current_idx = torch.full((n_heads, 1), k_len - 1, device=query.device, dtype=torch.long)
+        candidate_idx = torch.cat([candidate_idx, current_idx], dim=1)
+        candidate_valid = torch.cat([candidate_valid, allowed_heads[:, -1:]], dim=1)
+
+        candidate_low = k_low[0].float().gather(
+            dim=1,
+            index=candidate_idx[..., None].expand(n_heads, candidate_idx.shape[1], self.serving.rank_dim),
+        )
+        candidate_scores = (candidate_low * qh_low[:, None, :]).sum(dim=-1) / math.sqrt(self.serving.rank_dim)
+        candidate_scores = candidate_scores.masked_fill(~candidate_valid, torch.finfo(candidate_scores.dtype).min)
+        rank_count = min(max_budget, int(candidate_idx.shape[1]))
+        rank_scores, rank_order = candidate_scores.topk(rank_count, dim=-1)
+        selected_idx = candidate_idx.gather(dim=1, index=rank_order)
+        selected_valid = candidate_valid.gather(dim=1, index=rank_order)
+
+        if rank_count > 1:
+            margin_ref = min(min_budget, rank_count) - 1
+            margins = rank_scores[:, 0] - rank_scores[:, margin_ref]
+            budgets = torch.full((n_heads,), max_budget, device=query.device, dtype=torch.long)
+            budgets = torch.where(
+                margins >= self.serving.adaptive_high_margin,
+                torch.full_like(budgets, min_budget),
+                budgets,
+            )
+            budgets = torch.where(
+                (margins < self.serving.adaptive_high_margin) & (margins >= self.serving.adaptive_low_margin),
+                torch.full_like(budgets, mid_budget),
+                budgets,
+            ).clamp(max=rank_count)
+        else:
+            budgets = torch.ones(n_heads, device=query.device, dtype=torch.long)
+
+        budget_valid = torch.arange(rank_count, device=query.device)[None, :] < budgets[:, None]
+        same_idx = selected_idx[:, :, None] == selected_idx[:, None, :]
+        prior = torch.triu(torch.ones(rank_count, rank_count, device=query.device, dtype=torch.bool), diagonal=1)
+        duplicate = (same_idx & prior[None, :, :]).any(dim=1)
+        selected_valid = selected_valid & budget_valid & ~duplicate
+
+        selected_keys = key_states[0].gather(
+            dim=1,
+            index=selected_idx[..., None].expand(n_heads, rank_count, head_dim),
+        )
+        selected_values = value_states[0].gather(
+            dim=1,
+            index=selected_idx[..., None].expand(n_heads, rank_count, head_dim),
+        )
+        selected_scores = (selected_keys.float() * query[0, :, 0, None, :].float()).sum(dim=-1) * self.scaling
+        selected_scores = selected_scores.masked_fill(~selected_valid, torch.finfo(selected_scores.dtype).min)
+        weights = F.softmax(selected_scores, dim=-1, dtype=torch.float32).to(query.dtype)
+        output = (weights[..., None] * selected_values).sum(dim=1)
+
+        if self.stats is not None:
+            self.stats.add(
+                int(self.layer_idx or 0),
+                {
+                    "summoned": float(candidate_valid.float().sum().item()),
+                    "exact_scored": float(selected_valid.float().sum().item()),
+                    "verified": float(selected_valid.float().sum().item()),
+                    "queries": float(n_heads),
+                    "cell_visits": float(n_heads * subspaces * cells_per_subspace),
+                },
+            )
+
+        return output[None, :, None, :]
+
     def _key_catalog(
         self,
         key_states: torch.Tensor,
@@ -353,12 +475,12 @@ class SVALlamaAttention(nn.Module):
             new_codes = encode_product_keys(new_k_low[0], codebooks, self.serving.assign_chunk_size)
             k_low = torch.cat([self._cached_k_low, new_k_low], dim=2)
             coarse_codes = torch.cat([self._cached_coarse_codes, new_codes], dim=1)
-            if self.serving.summon_mode == "inverted":
+            if self.serving.summon_mode in {"inverted", "inverted_static"}:
                 self._append_postings(new_codes, start, int(codebooks.shape[2]))
         else:
             k_low = torch.einsum("bhsd,hdr->bhsr", key_states.float(), k_proj)
             coarse_codes = encode_product_keys(k_low[0], codebooks, self.serving.assign_chunk_size)
-            if self.serving.summon_mode == "inverted":
+            if self.serving.summon_mode in {"inverted", "inverted_static"}:
                 self._rebuild_postings(coarse_codes, int(codebooks.shape[2]))
 
         self._cached_k_low = k_low.detach()

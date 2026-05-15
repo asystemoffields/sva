@@ -176,6 +176,10 @@ The first indexed-summon check on that same 24-case panel is quality-credible bu
 
 The tighter indexed check shows the current speed wall is implementation-side. At `8` cells/subspace, CE001 reached answer KL `0.038735`, top-1 `0.910714`, cosine `0.992045`, and NLL delta `-0.425858`; at `4`, KL drifted to `0.082317` and cosine to `0.989791` while NLL delta stayed strong at `-0.452635`. Decode slowdown stayed near `3.1x` in both settings, even though decode summoned counts fell sharply, so the bottleneck is now the Python/posting-list/gather path rather than verifier reads. The next test is `1` and `2` cells/subspace as an overhead floor.
 
+The `1/2` cells overhead-floor run confirms the wall-clock target. At `2` cells/subspace, CE001 reached KL `0.088524`, top-1 `0.886905`, cosine `0.998575`, and NLL delta `-0.710121`; at `1`, KL drifted to `0.166606` and top-1 to `0.821429`. Decode slowdown stayed around `3.0-3.3x`, so shrinking the posting-list union alone will not make the current inverted path fast. The next implementation is a vectorized/static candidate builder that removes per-head Python loops and full candidate-list deduplication, then retests the quality-relevant `8/16` cells settings.
+
+The static inverted decode path is the first wall-clock improvement on indexed summon. At `16` cells/subspace, CE001 reached KL `0.034456`, top-1 `0.910714`, cosine `0.999215`, and NLL delta `-0.435238`, with decode slowdown reduced from the old inverted `3.296342x` to `1.872479x`. At `8` cells/subspace, KL was `0.040815`, top-1 `0.916667`, cosine `0.991645`, and decode slowdown `2.276378x`. The current best wall-clock target is `16` cells/subspace with a verifier-ready retrieval path: fixed candidate tensors, duplicate refill before verification, and separate timing for catalog lookup, exact scoring, value gather, and value aggregation.
+
 ## Files
 
 - `experiments/sva_kill_test.py`: standalone toy benchmark.
@@ -369,6 +373,8 @@ The tighter indexed check shows the current speed wall is implementation-side. A
 - `results/late4_answerce_broad_panel_snapshot_2026-05-14.md`: broader held-out validation of the answer-KL+CE late4 adapter.
 - `results/late4_answerce_inverted_panel_snapshot_2026-05-14.md`: indexed-summon validation of the answer-KL+CE late4 adapter.
 - `results/late4_answerce_inverted_tight_panel_snapshot_2026-05-14.md`: tighter `4/8` cells indexed-summon validation of the answer-KL+CE late4 adapter.
+- `results/late4_answerce_inverted_floor_panel_snapshot_2026-05-14.md`: `1/2` cells indexed-summon overhead-floor validation.
+- `results/late4_answerce_inverted_static_panel_snapshot_2026-05-14.md`: vectorized/static indexed-summon wall-clock validation.
 - `results/hf_artifacts/sva-smollm2-135m-2x256-v1/`: local HF/GitHub-ready `2x256` SVA artifact bundle.
 - `results/hf_artifacts/sva-smollm2-135m-2x256-longctx-refresh-v1/`: local HF/GitHub-ready long-context refreshed `2x256` SVA artifact bundle.
 - `results/hf_artifacts/sva-smollm2-135m-2x256-attnweighted-v1/`: local HF/GitHub-ready attention-weighted long-context `2x256` SVA artifact bundle.
@@ -452,6 +458,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_bac
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-late4-answerce-broad-panel -ModalFile modal_h100_late4_answerce_broad_panel.py
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-late4-answerce-inverted-panel -ModalFile modal_h100_late4_answerce_inverted_panel.py
 powershell -NoProfile -ExecutionPolicy Bypass -Command "& '.\scripts\start_modal_h100_background.ps1' -Name 'sva-h100-late4-answerce-inverted-tight-panel' -ModalFile 'modal_h100_late4_answerce_inverted_panel.py' -ModalArgs '--cells','4,8'"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "& '.\scripts\start_modal_h100_background.ps1' -Name 'sva-h100-late4-answerce-inverted-static-panel' -ModalFile 'modal_h100_late4_answerce_inverted_panel.py' -ModalArgs '--cells','8,16','--summon-mode','inverted_static'"
 ```
 
 The launcher uses `modal run --detach` and writes local metadata, stdout, stderr, and result files under `results/modal_runs/`.

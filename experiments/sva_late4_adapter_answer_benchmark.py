@@ -95,7 +95,7 @@ def main() -> None:
     parser.add_argument("--budget", type=int, default=None)
     parser.add_argument("--assign-chunk-size", type=int, default=8192)
     parser.add_argument("--query-chunk-size", type=int, default=None)
-    parser.add_argument("--summon-mode", choices=["scan", "inverted"], default="")
+    parser.add_argument("--summon-mode", choices=["scan", "inverted", "inverted_static"], default="")
     parser.add_argument("--inverted-cells-per-subspace", type=int, default=32)
     parser.add_argument("--adapter-rank", type=int, default=None)
     parser.add_argument("--adapter-scale", type=float, default=None)

@@ -305,7 +305,7 @@ def main() -> None:
     parser.add_argument("--shortlist", type=int, default=512)
     parser.add_argument("--budget", type=int, default=128)
     parser.add_argument("--query-chunk-size", type=int, default=128)
-    parser.add_argument("--summon-mode", choices=["scan", "inverted"], default="scan")
+    parser.add_argument("--summon-mode", choices=["scan", "inverted", "inverted_static"], default="scan")
     parser.add_argument("--adapter-rank", type=int, default=16)
     parser.add_argument("--adapter-scale", type=float, default=1.0)
     parser.add_argument("--distill-steps", type=int, default=24)

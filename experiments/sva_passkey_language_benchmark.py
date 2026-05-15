@@ -321,7 +321,7 @@ def main() -> None:
     parser.add_argument("--budget", type=int, default=512)
     parser.add_argument("--assign-chunk-size", type=int, default=8192)
     parser.add_argument("--query-chunk-size", type=int, default=128)
-    parser.add_argument("--summon-mode", choices=["scan", "inverted"], default="inverted")
+    parser.add_argument("--summon-mode", choices=["scan", "inverted", "inverted_static"], default="inverted")
     parser.add_argument("--socket-layers", default="")
     parser.add_argument("--inverted-cells-per-subspace", type=int, default=32)
     parser.add_argument("--adaptive-min-budget", type=int, default=128)

@@ -27,8 +27,6 @@ BASE_ARGS = [
     "219384,407615,592806,638174,750291,826430,319057,460128",
     "--placements",
     "start,middle,end",
-    "--summon-mode",
-    "inverted",
     "--attn-implementation",
     "sdpa",
     "--device",
@@ -46,21 +44,26 @@ def parse_cells(value: str) -> list[int]:
 
 
 @app.function(image=image, gpu="H100", timeout=180 * 60)
-def run_late4_answerce_inverted_panel(cells_per_subspace: int) -> str:
+def run_late4_answerce_inverted_panel(cells_per_subspace: int, summon_mode: str) -> str:
     import os
     import subprocess
     import sys
 
+    if summon_mode not in {"inverted", "inverted_static"}:
+        raise ValueError(f"Unsupported summon mode: {summon_mode}")
     os.chdir("/root/sva")
     cmd = [
         sys.executable,
         "-u",
         "experiments/sva_late4_adapter_answer_benchmark.py",
         *BASE_ARGS,
+        "--summon-mode",
+        summon_mode,
         "--inverted-cells-per-subspace",
         str(cells_per_subspace),
     ]
     print("late4_answerce_inverted_panel_h100_start", flush=True)
+    print(f"summon_mode,{summon_mode}", flush=True)
     print(f"cells_per_subspace,{cells_per_subspace}", flush=True)
     print("command," + " ".join(cmd), flush=True)
     process = subprocess.Popen(
@@ -84,12 +87,13 @@ def run_late4_answerce_inverted_panel(cells_per_subspace: int) -> str:
 
 
 @app.local_entrypoint()
-def main(cells: str = "16,32") -> str:
+def main(cells: str = "16,32", summon_mode: str = "inverted") -> str:
     call_ids: list[str] = []
     for cells_per_subspace in parse_cells(cells):
-        call = run_late4_answerce_inverted_panel.spawn(cells_per_subspace)
+        call = run_late4_answerce_inverted_panel.spawn(cells_per_subspace, summon_mode)
         call_ids.append(call.object_id)
         print(f"function_call_id,cells={cells_per_subspace},{call.object_id}")
         print(f"dashboard,cells={cells_per_subspace},{call.get_dashboard_url()}")
     print(f"adapter_dir,{ADAPTER_DIR}")
+    print(f"summon_mode,{summon_mode}")
     return ",".join(call_ids)

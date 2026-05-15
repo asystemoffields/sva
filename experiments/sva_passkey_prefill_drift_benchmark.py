@@ -170,7 +170,7 @@ def main() -> None:
     parser.add_argument("--budget", type=int, default=2048)
     parser.add_argument("--assign-chunk-size", type=int, default=8192)
     parser.add_argument("--query-chunk-size", type=int, default=128)
-    parser.add_argument("--summon-mode", choices=["scan", "inverted"], default="scan")
+    parser.add_argument("--summon-mode", choices=["scan", "inverted", "inverted_static"], default="scan")
     parser.add_argument("--socket-layers", default="")
     parser.add_argument("--attn-implementation", default="sdpa")
     parser.add_argument("--device", choices=["auto", "cpu", "cuda"], default="auto")
