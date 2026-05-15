@@ -66,6 +66,11 @@ class SVALlamaAttention(nn.Module):
         self.register_buffer("sva_q_proj", layer_artifacts.q_proj.detach().float().clone(), persistent=False)
         self.register_buffer("sva_k_proj", layer_artifacts.k_proj.detach().float().clone(), persistent=False)
         self.register_buffer("sva_logit_scale", layer_artifacts.logit_scale.detach().float().clone(), persistent=False)
+        self.register_buffer(
+            "sva_scale",
+            layer_artifacts.logit_scale.detach().float().exp().clamp(0.01, 100.0).clone(),
+            persistent=False,
+        )
         self.register_buffer("sva_coarse_codebooks", layer_artifacts.coarse_codebooks.detach().float().clone(), persistent=False)
         self._cached_k_low: torch.Tensor | None = None
         self._cached_coarse_codes: torch.Tensor | None = None
@@ -192,10 +197,15 @@ class SVALlamaAttention(nn.Module):
 
         outer_start = self._profile_now(query.device) if profile_static else 0.0
         stage_start = outer_start
-        q_proj = self.sva_q_proj.to(device=query.device, dtype=torch.float32)
-        k_proj = self.sva_k_proj.to(device=query.device, dtype=torch.float32)
-        scale = self.sva_logit_scale.to(device=query.device, dtype=torch.float32).exp().clamp(0.01, 100.0)
-        codebooks = self.sva_coarse_codebooks.to(device=query.device, dtype=torch.float32)
+        q_proj = self.sva_q_proj
+        k_proj = self.sva_k_proj
+        scale = self.sva_scale
+        codebooks = self.sva_coarse_codebooks
+        if q_proj.device != query.device:
+            q_proj = q_proj.to(device=query.device)
+            k_proj = k_proj.to(device=query.device)
+            scale = scale.to(device=query.device)
+            codebooks = codebooks.to(device=query.device)
         q_low = torch.einsum("bhtd,hdr->bhtr", query.float(), q_proj) * scale[None, :, None, None]
         if profile_static:
             outer_timings["static_projection_ms"] = self._profile_elapsed_ms(query.device, stage_start)
@@ -584,15 +594,21 @@ class SVALlamaAttention(nn.Module):
         if can_append:
             start = self._cached_key_len
             new_k_low = torch.einsum("bhsd,hdr->bhsr", key_states[:, :, start:, :].float(), k_proj)
-            new_codes = encode_product_keys(new_k_low[0], codebooks, self.serving.assign_chunk_size)
             k_low = torch.cat([self._cached_k_low, new_k_low], dim=2)
-            coarse_codes = torch.cat([self._cached_coarse_codes, new_codes], dim=1)
             if self.serving.summon_mode == "inverted":
+                new_codes = encode_product_keys(new_k_low[0], codebooks, self.serving.assign_chunk_size)
+                coarse_codes = torch.cat([self._cached_coarse_codes, new_codes], dim=1)
                 self._append_postings(new_codes, start, int(codebooks.shape[2]))
-            elif self.serving.summon_mode == "inverted_static":
+            elif self.serving.summon_mode == "inverted_static" and q_len == 1:
+                coarse_codes = self._cached_coarse_codes
+                rebuild_interval = max(1, int(self.serving.static_tail_rebuild_interval))
                 tail_len = k_len - self._cached_postings_key_len
-                if self._cached_postings is None or tail_len >= self.serving.static_tail_rebuild_interval:
+                if self._cached_postings is None or tail_len >= rebuild_interval:
+                    coarse_codes = encode_product_keys(k_low[0], codebooks, self.serving.assign_chunk_size)
                     self._rebuild_postings(coarse_codes, int(codebooks.shape[2]))
+            else:
+                new_codes = encode_product_keys(new_k_low[0], codebooks, self.serving.assign_chunk_size)
+                coarse_codes = torch.cat([self._cached_coarse_codes, new_codes], dim=1)
         else:
             k_low = torch.einsum("bhsd,hdr->bhsr", key_states.float(), k_proj)
             coarse_codes = encode_product_keys(k_low[0], codebooks, self.serving.assign_chunk_size)
