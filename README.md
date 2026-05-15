@@ -180,6 +180,12 @@ The `1/2` cells overhead-floor run confirms the wall-clock target. At `2` cells/
 
 The static inverted decode path is the first wall-clock improvement on indexed summon. At `16` cells/subspace, CE001 reached KL `0.034456`, top-1 `0.910714`, cosine `0.999215`, and NLL delta `-0.435238`, with decode slowdown reduced from the old inverted `3.296342x` to `1.872479x`. At `8` cells/subspace, KL was `0.040815`, top-1 `0.916667`, cosine `0.991645`, and decode slowdown `2.276378x`. The current best wall-clock target is `16` cells/subspace with a verifier-ready retrieval path: fixed candidate tensors, duplicate refill before verification, and separate timing for catalog lookup, exact scoring, value gather, and value aggregation.
 
+The Lantern router test is the next lookup-geometry probe. It trains page-side write hooks and query-side route probes directly from full-attention top-key labels, then evaluates whether keys can write themselves into cells that future queries can probe with low candidate counts. This tests the "pages summon themselves" hypothesis more directly than unsupervised IVF or multi-write k-means cells.
+
+The first capacity-balanced Lantern run made the page-side idea operational but did not beat the lookup frontier. Hard per-cell write caps fixed the candidate explosion: aggregate rows now project from about `1.9k` to `68.8k` candidates at one million tokens. The recall curve is still weak in the useful low-thousands band: `2048 cells / 2 writes / 2 probes` reached `0.065755` recall at about `3.4k` projected candidates, and `2048 / 2 / 4` reached `0.142997` at about `6.3k`. The highest row, `512 / 8 / 4`, reached `0.475524` recall at about `68.8k`. The next Lantern step is training the router against capacity-constrained route alignment rather than training soft overlap and imposing hard capacity afterward.
+
+The route-alignment follow-up improved the curve a little but did not change the decision. With key/query alignment losses and stronger balance, `2048 / 2 / 2` rose to `0.075118` recall at about `3.6k` projected candidates, `1024 / 2 / 4` reached `0.231368` at about `12.3k`, and the widest `512 / 8 / 4` row reached `0.504433` at about `71.4k`. This is useful evidence, but it still trails the earlier IVF/PQ serving frontier in the low-thousands band. The next Lantern idea would need capacity-aware assignment in the training loop itself, likely a balanced/Sinkhorn-style relaxation; otherwise the mainline should stay on static inverted/PQ serving.
+
 ## Files
 
 - `experiments/sva_kill_test.py`: standalone toy benchmark.
@@ -216,6 +222,7 @@ The static inverted decode path is the first wall-clock improvement on indexed s
 - `experiments/sva_codebook_refresh_benchmark.py`: held-out calibration-time codebook refresh benchmark for context-matched SVA catalogs.
 - `experiments/sva_late4_logit_distill.py`: SVA-active final-logit or answer-token distillation probe for tight-budget late4 sockets.
 - `experiments/sva_late4_adapter_answer_benchmark.py`: full answer-decode validation harness for a saved tight-budget late4 SVA adapter, including an unadapted SVA control.
+- `experiments/sva_lantern_router_test.py`: supervised page-side/write-hook router probe for sublinear candidate lookup.
 - `experiments/sva_artifact_io.py`: save/load helpers for portable frozen SVA artifact bundles.
 - `experiments/export_sva_artifact.py`: exporter for HF/GitHub-ready SVA artifact folders.
 - `experiments/export_refreshed_sva_artifact.py`: exporter that refreshes artifact coarse codebooks on a calibration stream while preserving the trained low-rank projections.
@@ -269,6 +276,7 @@ The static inverted decode path is the first wall-clock improvement on indexed s
 - `modal_h100_late4_answerce_adapter_answer.py`: Modal H100 runner for answer-decode validation of the answer-KL+CE late4 adapter.
 - `modal_h100_late4_answerce_broad_panel.py`: Modal H100 runner for broader held-out validation of the answer-KL+CE late4 adapter.
 - `modal_h100_late4_answerce_inverted_panel.py`: Modal H100 runner for indexed-summon validation of the answer-KL+CE late4 adapter.
+- `modal_h100_lantern_router.py`: Modal H100 runner for supervised Lantern routing.
 - `modal_h100_block_elevator.py`: Modal H100 runner for block-first SVA elevator benchmarking.
 - `modal_h100_block_hybrid.py`: Modal H100 runner for token/block hybrid SVA benchmarking.
 - `modal_h100_learned_hybrid_selector.py`: Modal H100 runner for learned token/block selector benchmarking.
@@ -375,6 +383,8 @@ The static inverted decode path is the first wall-clock improvement on indexed s
 - `results/late4_answerce_inverted_tight_panel_snapshot_2026-05-14.md`: tighter `4/8` cells indexed-summon validation of the answer-KL+CE late4 adapter.
 - `results/late4_answerce_inverted_floor_panel_snapshot_2026-05-14.md`: `1/2` cells indexed-summon overhead-floor validation.
 - `results/late4_answerce_inverted_static_panel_snapshot_2026-05-14.md`: vectorized/static indexed-summon wall-clock validation.
+- `results/lantern_router_capacity_snapshot_2026-05-14.md`: supervised page-side Lantern routing with capacity-balanced key writes.
+- `results/lantern_router_alignment_snapshot_2026-05-14.md`: route-aligned Lantern follow-up against the capacity-balanced baseline.
 - `results/hf_artifacts/sva-smollm2-135m-2x256-v1/`: local HF/GitHub-ready `2x256` SVA artifact bundle.
 - `results/hf_artifacts/sva-smollm2-135m-2x256-longctx-refresh-v1/`: local HF/GitHub-ready long-context refreshed `2x256` SVA artifact bundle.
 - `results/hf_artifacts/sva-smollm2-135m-2x256-attnweighted-v1/`: local HF/GitHub-ready attention-weighted long-context `2x256` SVA artifact bundle.
@@ -459,6 +469,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_bac
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-late4-answerce-inverted-panel -ModalFile modal_h100_late4_answerce_inverted_panel.py
 powershell -NoProfile -ExecutionPolicy Bypass -Command "& '.\scripts\start_modal_h100_background.ps1' -Name 'sva-h100-late4-answerce-inverted-tight-panel' -ModalFile 'modal_h100_late4_answerce_inverted_panel.py' -ModalArgs '--cells','4,8'"
 powershell -NoProfile -ExecutionPolicy Bypass -Command "& '.\scripts\start_modal_h100_background.ps1' -Name 'sva-h100-late4-answerce-inverted-static-panel' -ModalFile 'modal_h100_late4_answerce_inverted_panel.py' -ModalArgs '--cells','8,16','--summon-mode','inverted_static'"
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-lantern-router -ModalFile modal_h100_lantern_router.py
 ```
 
 The launcher uses `modal run --detach` and writes local metadata, stdout, stderr, and result files under `results/modal_runs/`.
