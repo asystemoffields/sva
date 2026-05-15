@@ -28,6 +28,7 @@ from sva_passkey_language_benchmark import (
     emit,
     emit_score,
     score_answer_decode,
+    stats_value,
 )
 from sva_pretrained_socket_test import format_layer_list, parse_layer_list
 
@@ -49,6 +50,16 @@ def emit_comparison(
         "answer_nll_delta": candidate_result.answer_nll - full_result.answer_nll,
         "prefill_slowdown": candidate_result.prefill_ms / max(full_result.prefill_ms, 1e-9),
         "decode_slowdown": candidate_result.decode_ms / max(full_result.decode_ms, 1e-9),
+        "decode_static_catalog_ms": stats_value(candidate_result.decode_stats, "avg_static_catalog_ms"),
+        "decode_static_refill_ms": stats_value(candidate_result.decode_stats, "avg_static_refill_ms"),
+        "decode_static_budget_ms": stats_value(candidate_result.decode_stats, "avg_static_budget_ms"),
+        "decode_static_gather_ms": stats_value(candidate_result.decode_stats, "avg_static_gather_ms"),
+        "decode_static_exact_score_ms": stats_value(candidate_result.decode_stats, "avg_static_exact_score_ms"),
+        "decode_static_aggregate_ms": stats_value(candidate_result.decode_stats, "avg_static_aggregate_ms"),
+        "decode_static_total_ms": stats_value(candidate_result.decode_stats, "avg_static_total_ms"),
+        "decode_static_projection_ms": stats_value(candidate_result.decode_stats, "avg_static_projection_ms"),
+        "decode_static_key_catalog_ms": stats_value(candidate_result.decode_stats, "avg_static_key_catalog_ms"),
+        "decode_static_outer_total_ms": stats_value(candidate_result.decode_stats, "avg_static_outer_total_ms"),
         **compare_answer_logits(full_result, candidate_result),
     }
     emit(
@@ -75,6 +86,16 @@ def emit_mean(variant: str, comparisons: list[dict[str, float]]) -> None:
             "answer_nll_delta": mean(comparisons, "answer_nll_delta"),
             "prefill_slowdown": mean(comparisons, "prefill_slowdown"),
             "decode_slowdown": mean(comparisons, "decode_slowdown"),
+            "decode_static_catalog_ms": mean(comparisons, "decode_static_catalog_ms"),
+            "decode_static_refill_ms": mean(comparisons, "decode_static_refill_ms"),
+            "decode_static_budget_ms": mean(comparisons, "decode_static_budget_ms"),
+            "decode_static_gather_ms": mean(comparisons, "decode_static_gather_ms"),
+            "decode_static_exact_score_ms": mean(comparisons, "decode_static_exact_score_ms"),
+            "decode_static_aggregate_ms": mean(comparisons, "decode_static_aggregate_ms"),
+            "decode_static_total_ms": mean(comparisons, "decode_static_total_ms"),
+            "decode_static_projection_ms": mean(comparisons, "decode_static_projection_ms"),
+            "decode_static_key_catalog_ms": mean(comparisons, "decode_static_key_catalog_ms"),
+            "decode_static_outer_total_ms": mean(comparisons, "decode_static_outer_total_ms"),
             "answer_kl_to_full": mean(comparisons, "answer_kl_to_full"),
             "answer_top1_agreement": mean(comparisons, "answer_top1_agreement"),
             "answer_logit_cosine": mean(comparisons, "answer_logit_cosine"),
@@ -99,6 +120,8 @@ def main() -> None:
     parser.add_argument("--inverted-cells-per-subspace", type=int, default=32)
     parser.add_argument("--adapter-rank", type=int, default=None)
     parser.add_argument("--adapter-scale", type=float, default=None)
+    parser.add_argument("--profile-components", action="store_true")
+    parser.add_argument("--static-tail-rebuild-interval", type=int, default=64)
     parser.add_argument("--attn-implementation", default="sdpa")
     parser.add_argument("--device", choices=["auto", "cpu", "cuda"], default="auto")
     parser.add_argument("--dtype", choices=["auto", "float32", "bfloat16", "float16"], default="auto")
@@ -159,6 +182,7 @@ def main() -> None:
     print(f"shortlist,{shortlist}", flush=True)
     print(f"budget,{budget}", flush=True)
     print(f"adapter_rank,{adapter_rank}", flush=True)
+    print(f"profile_components,{args.profile_components}", flush=True)
 
     cases = [build_prompt_case(tokenizer, context, key, placement, device) for context in contexts for key in keys for placement in placements]
     full_results = []
@@ -178,6 +202,8 @@ def main() -> None:
         query_chunk_size=query_chunk_size,
         summon_mode=summon_mode,
         inverted_cells_per_subspace=args.inverted_cells_per_subspace,
+        profile_components=args.profile_components,
+        static_tail_rebuild_interval=args.static_tail_rebuild_interval,
         layers=socket_layers,
     )
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -33,6 +34,8 @@ class SVALlamaServingConfig:
     adaptive_mid_budget: int | None = None
     adaptive_low_margin: float = 0.35
     adaptive_high_margin: float = 0.70
+    profile_components: bool = False
+    static_tail_rebuild_interval: int = 64
 
 
 class SVALlamaAttention(nn.Module):
@@ -68,6 +71,7 @@ class SVALlamaAttention(nn.Module):
         self._cached_coarse_codes: torch.Tensor | None = None
         self._cached_postings: torch.Tensor | None = None
         self._cached_posting_counts: torch.Tensor | None = None
+        self._cached_postings_key_len = 0
         self._cached_key_len = 0
         self._cached_signature: tuple[torch.device, torch.dtype, int, int, int] | None = None
 
@@ -104,11 +108,24 @@ class SVALlamaAttention(nn.Module):
         selected_valid = unique_valid.gather(dim=1, index=selected_order)
         return selected_idx, selected_scores, selected_valid, refill_count
 
+    @staticmethod
+    def _profile_now(device: torch.device) -> float:
+        if device.type == "cuda":
+            torch.cuda.synchronize(device)
+        return time.perf_counter()
+
+    @staticmethod
+    def _profile_elapsed_ms(device: torch.device, start: float) -> float:
+        if device.type == "cuda":
+            torch.cuda.synchronize(device)
+        return (time.perf_counter() - start) * 1000.0
+
     def reset_catalog(self) -> None:
         self._cached_k_low = None
         self._cached_coarse_codes = None
         self._cached_postings = None
         self._cached_posting_counts = None
+        self._cached_postings_key_len = 0
         self._cached_key_len = 0
         self._cached_signature = None
 
@@ -158,6 +175,9 @@ class SVALlamaAttention(nn.Module):
         if batch != 1:
             raise ValueError("SVA Llama adapter currently expects batch size 1.")
 
+        profile_static = self.serving.profile_components and self.serving.summon_mode == "inverted_static" and q_len == 1
+        outer_timings: dict[str, float] = {}
+
         if attention_mask is not None:
             allowed = attention_mask[..., :q_len, :k_len] > -1e4
             allowed = allowed.expand(batch, n_heads, q_len, k_len)
@@ -170,12 +190,20 @@ class SVALlamaAttention(nn.Module):
             allowed = key_positions[None, :] <= query_positions[:, None]
             allowed = allowed[None, None, :, :].expand(batch, n_heads, q_len, k_len)
 
+        outer_start = self._profile_now(query.device) if profile_static else 0.0
+        stage_start = outer_start
         q_proj = self.sva_q_proj.to(device=query.device, dtype=torch.float32)
         k_proj = self.sva_k_proj.to(device=query.device, dtype=torch.float32)
         scale = self.sva_logit_scale.to(device=query.device, dtype=torch.float32).exp().clamp(0.01, 100.0)
         codebooks = self.sva_coarse_codebooks.to(device=query.device, dtype=torch.float32)
         q_low = torch.einsum("bhtd,hdr->bhtr", query.float(), q_proj) * scale[None, :, None, None]
+        if profile_static:
+            outer_timings["static_projection_ms"] = self._profile_elapsed_ms(query.device, stage_start)
+            stage_start = self._profile_now(query.device)
         k_low, coarse_codes = self._key_catalog(key_states, k_proj, codebooks, q_len)
+        if profile_static:
+            outer_timings["static_key_catalog_ms"] = self._profile_elapsed_ms(query.device, stage_start)
+            stage_start = self._profile_now(query.device)
         actual_shortlist = min(self.serving.coarse_shortlist, k_len)
         actual_budget = min(self.serving.budget, actual_shortlist)
         query_chunk_size = self.serving.query_chunk_size
@@ -183,7 +211,7 @@ class SVALlamaAttention(nn.Module):
             query_chunk_size = 128 if (q_len >= 4096 or actual_shortlist >= 2048) else q_len
 
         if self.serving.summon_mode == "inverted_static" and q_len == 1:
-            return self._inverted_static_decode_attention(
+            output = self._inverted_static_decode_attention(
                 query,
                 key_states,
                 value_states,
@@ -194,6 +222,16 @@ class SVALlamaAttention(nn.Module):
                 allowed,
                 actual_budget,
             )
+            if profile_static and self.stats is not None:
+                outer_timings["static_outer_total_ms"] = self._profile_elapsed_ms(query.device, outer_start)
+                self.stats.add(
+                    int(self.layer_idx or 0),
+                    {
+                        "profile_outer_calls": 1.0,
+                        **outer_timings,
+                    },
+                )
+            return output
         if self.serving.summon_mode == "inverted" and q_len == 1:
             return self._inverted_decode_attention(
                 query,
@@ -391,6 +429,11 @@ class SVALlamaAttention(nn.Module):
         if batch != 1 or q_len != 1:
             raise ValueError("Static inverted SVA decode expects batch size 1 and q_len 1.")
 
+        profile = self.serving.profile_components
+        timings: dict[str, float] = {}
+        total_start = self._profile_now(query.device) if profile else 0.0
+        stage_start = total_start
+
         min_budget = min(self.serving.adaptive_min_budget or max_budget, max_budget, k_len)
         mid_budget = min(self.serving.adaptive_mid_budget or max(min_budget, max_budget // 2), max_budget, k_len)
         max_budget = min(max_budget, k_len)
@@ -419,9 +462,19 @@ class SVALlamaAttention(nn.Module):
         allowed_heads = allowed[0, :, 0]
         candidate_valid = candidate_valid & allowed_heads.gather(dim=1, index=candidate_idx.clamp(0, k_len - 1))
 
-        current_idx = torch.full((n_heads, 1), k_len - 1, device=query.device, dtype=torch.long)
-        candidate_idx = torch.cat([candidate_idx, current_idx], dim=1)
-        candidate_valid = torch.cat([candidate_valid, allowed_heads[:, -1:]], dim=1)
+        tail_start = min(max(int(self._cached_postings_key_len), 0), k_len)
+        if tail_start < k_len:
+            tail_idx = torch.arange(tail_start, k_len, device=query.device)[None, :].expand(n_heads, -1)
+            candidate_idx = torch.cat([candidate_idx, tail_idx], dim=1)
+            candidate_valid = torch.cat([candidate_valid, allowed_heads[:, tail_start:k_len]], dim=1)
+        else:
+            current_idx = torch.full((n_heads, 1), k_len - 1, device=query.device, dtype=torch.long)
+            candidate_idx = torch.cat([candidate_idx, current_idx], dim=1)
+            candidate_valid = torch.cat([candidate_valid, allowed_heads[:, -1:]], dim=1)
+
+        if profile:
+            timings["static_catalog_ms"] = self._profile_elapsed_ms(query.device, stage_start)
+            stage_start = self._profile_now(query.device)
 
         candidate_low = k_low[0].float().gather(
             dim=1,
@@ -435,6 +488,10 @@ class SVALlamaAttention(nn.Module):
             max_budget,
         )
         rank_count = int(selected_idx.shape[1])
+
+        if profile:
+            timings["static_refill_ms"] = self._profile_elapsed_ms(query.device, stage_start)
+            stage_start = self._profile_now(query.device)
 
         if rank_count > 1:
             margin_ref = min(min_budget, rank_count) - 1
@@ -456,6 +513,10 @@ class SVALlamaAttention(nn.Module):
         budget_valid = torch.arange(rank_count, device=query.device)[None, :] < budgets[:, None]
         selected_valid = selected_valid & budget_valid
 
+        if profile:
+            timings["static_budget_ms"] = self._profile_elapsed_ms(query.device, stage_start)
+            stage_start = self._profile_now(query.device)
+
         selected_keys = key_states[0].gather(
             dim=1,
             index=selected_idx[..., None].expand(n_heads, rank_count, head_dim),
@@ -464,22 +525,40 @@ class SVALlamaAttention(nn.Module):
             dim=1,
             index=selected_idx[..., None].expand(n_heads, rank_count, head_dim),
         )
+
+        if profile:
+            timings["static_gather_ms"] = self._profile_elapsed_ms(query.device, stage_start)
+            stage_start = self._profile_now(query.device)
+
         selected_scores = (selected_keys.float() * query[0, :, 0, None, :].float()).sum(dim=-1) * self.scaling
         selected_scores = selected_scores.masked_fill(~selected_valid, torch.finfo(selected_scores.dtype).min)
+
+        if profile:
+            timings["static_exact_score_ms"] = self._profile_elapsed_ms(query.device, stage_start)
+            stage_start = self._profile_now(query.device)
+
         weights = F.softmax(selected_scores, dim=-1, dtype=torch.float32).to(query.dtype)
         output = (weights[..., None] * selected_values).sum(dim=1)
 
+        if profile:
+            timings["static_aggregate_ms"] = self._profile_elapsed_ms(query.device, stage_start)
+            timings["static_total_ms"] = self._profile_elapsed_ms(query.device, total_start)
+
         if self.stats is not None:
+            values = {
+                "summoned": float(candidate_valid.float().sum().item()),
+                "refill_pool": float(refill_count * n_heads),
+                "exact_scored": float(selected_valid.float().sum().item()),
+                "verified": float(selected_valid.float().sum().item()),
+                "queries": float(n_heads),
+                "cell_visits": float(n_heads * subspaces * cells_per_subspace),
+            }
+            if profile:
+                values["profile_calls"] = 1.0
+                values.update(timings)
             self.stats.add(
                 int(self.layer_idx or 0),
-                {
-                    "summoned": float(candidate_valid.float().sum().item()),
-                    "refill_pool": float(refill_count * n_heads),
-                    "exact_scored": float(selected_valid.float().sum().item()),
-                    "verified": float(selected_valid.float().sum().item()),
-                    "queries": float(n_heads),
-                    "cell_visits": float(n_heads * subspaces * cells_per_subspace),
-                },
+                values,
             )
 
         return output[None, :, None, :]
@@ -508,8 +587,12 @@ class SVALlamaAttention(nn.Module):
             new_codes = encode_product_keys(new_k_low[0], codebooks, self.serving.assign_chunk_size)
             k_low = torch.cat([self._cached_k_low, new_k_low], dim=2)
             coarse_codes = torch.cat([self._cached_coarse_codes, new_codes], dim=1)
-            if self.serving.summon_mode in {"inverted", "inverted_static"}:
+            if self.serving.summon_mode == "inverted":
                 self._append_postings(new_codes, start, int(codebooks.shape[2]))
+            elif self.serving.summon_mode == "inverted_static":
+                tail_len = k_len - self._cached_postings_key_len
+                if self._cached_postings is None or tail_len >= self.serving.static_tail_rebuild_interval:
+                    self._rebuild_postings(coarse_codes, int(codebooks.shape[2]))
         else:
             k_low = torch.einsum("bhsd,hdr->bhsr", key_states.float(), k_proj)
             coarse_codes = encode_product_keys(k_low[0], codebooks, self.serving.assign_chunk_size)
@@ -553,6 +636,7 @@ class SVALlamaAttention(nn.Module):
 
         self._cached_postings = postings
         self._cached_posting_counts = counts
+        self._cached_postings_key_len = k_len
 
     @torch.no_grad()
     def _append_postings(self, new_codes: torch.Tensor, start: int, codewords: int) -> None:
@@ -588,6 +672,7 @@ class SVALlamaAttention(nn.Module):
                     count = int(self._cached_posting_counts[head_idx, subspace_idx, codeword].item())
                     self._cached_postings[head_idx, subspace_idx, codeword, count] = position
                     self._cached_posting_counts[head_idx, subspace_idx, codeword] += 1
+        self._cached_postings_key_len = start + new_len
 
 
 class SVALlamaPatcher:
@@ -607,6 +692,8 @@ class SVALlamaPatcher:
         adaptive_mid_budget: int | None = None,
         adaptive_low_margin: float = 0.35,
         adaptive_high_margin: float = 0.70,
+        profile_components: bool = False,
+        static_tail_rebuild_interval: int = 64,
         layers: list[int] | None = None,
     ) -> None:
         self.model = model
@@ -626,6 +713,8 @@ class SVALlamaPatcher:
             adaptive_mid_budget=adaptive_mid_budget,
             adaptive_low_margin=adaptive_low_margin,
             adaptive_high_margin=adaptive_high_margin,
+            profile_components=profile_components,
+            static_tail_rebuild_interval=static_tail_rebuild_interval,
         )
 
     def patch(self) -> "SVALlamaPatcher":
@@ -706,6 +795,8 @@ def patch_llama_attention(
     adaptive_mid_budget: int | None = None,
     adaptive_low_margin: float = 0.35,
     adaptive_high_margin: float = 0.70,
+    profile_components: bool = False,
+    static_tail_rebuild_interval: int = 64,
     layers: list[int] | None = None,
 ) -> SVALlamaPatcher:
     """Patch a Llama-family model with SVA attention and return a reversible handle."""
@@ -728,5 +819,7 @@ def patch_llama_attention(
         adaptive_mid_budget=adaptive_mid_budget,
         adaptive_low_margin=adaptive_low_margin,
         adaptive_high_margin=adaptive_high_margin,
+        profile_components=profile_components,
+        static_tail_rebuild_interval=static_tail_rebuild_interval,
         layers=layers,
     ).patch()

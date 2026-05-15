@@ -302,6 +302,16 @@ def emit_score(prefix: str, variant: str, case: PromptCase, result: ScoreResult)
             "decode_avg_refill_pool": stats_value(result.decode_stats, "avg_refill_pool"),
             "decode_avg_verified": decode_verified,
             "decode_avg_cell_visits": stats_value(result.decode_stats, "avg_cell_visits"),
+            "decode_static_catalog_ms": stats_value(result.decode_stats, "avg_static_catalog_ms"),
+            "decode_static_refill_ms": stats_value(result.decode_stats, "avg_static_refill_ms"),
+            "decode_static_budget_ms": stats_value(result.decode_stats, "avg_static_budget_ms"),
+            "decode_static_gather_ms": stats_value(result.decode_stats, "avg_static_gather_ms"),
+            "decode_static_exact_score_ms": stats_value(result.decode_stats, "avg_static_exact_score_ms"),
+            "decode_static_aggregate_ms": stats_value(result.decode_stats, "avg_static_aggregate_ms"),
+            "decode_static_total_ms": stats_value(result.decode_stats, "avg_static_total_ms"),
+            "decode_static_projection_ms": stats_value(result.decode_stats, "avg_static_projection_ms"),
+            "decode_static_key_catalog_ms": stats_value(result.decode_stats, "avg_static_key_catalog_ms"),
+            "decode_static_outer_total_ms": stats_value(result.decode_stats, "avg_static_outer_total_ms"),
             "decode_exact_read_reduction": reduction,
             "error": result.error,
         },
@@ -330,6 +340,8 @@ def main() -> None:
     parser.add_argument("--adaptive-mid-budget", type=int, default=256)
     parser.add_argument("--adaptive-low-margin", type=float, default=0.35)
     parser.add_argument("--adaptive-high-margin", type=float, default=0.70)
+    parser.add_argument("--profile-components", action="store_true")
+    parser.add_argument("--static-tail-rebuild-interval", type=int, default=64)
     parser.add_argument("--attn-implementation", default="sdpa")
     parser.add_argument("--device", choices=["auto", "cpu", "cuda"], default="auto")
     parser.add_argument("--dtype", choices=["auto", "float32", "bfloat16", "float16"], default="auto")
@@ -404,6 +416,8 @@ def main() -> None:
                     adaptive_mid_budget=args.adaptive_mid_budget,
                     adaptive_low_margin=args.adaptive_low_margin,
                     adaptive_high_margin=args.adaptive_high_margin,
+                    profile_components=args.profile_components,
+                    static_tail_rebuild_interval=args.static_tail_rebuild_interval,
                     layers=socket_layers,
                 )
                 try:

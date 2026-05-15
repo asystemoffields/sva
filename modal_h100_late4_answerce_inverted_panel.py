@@ -17,6 +17,8 @@ image = (
 
 
 ADAPTER_DIR = "results/hf_artifacts/sva-late4-512x128-answerdistill-ce001-v1"
+DEFAULT_KEYS = "219384,407615,592806,638174,750291,826430,319057,460128"
+DEFAULT_PLACEMENTS = "start,middle,end"
 
 BASE_ARGS = [
     "--adapter-dir",
@@ -24,9 +26,9 @@ BASE_ARGS = [
     "--contexts",
     "32768",
     "--keys",
-    "219384,407615,592806,638174,750291,826430,319057,460128",
+    DEFAULT_KEYS,
     "--placements",
-    "start,middle,end",
+    DEFAULT_PLACEMENTS,
     "--attn-implementation",
     "sdpa",
     "--device",
@@ -44,7 +46,13 @@ def parse_cells(value: str) -> list[int]:
 
 
 @app.function(image=image, gpu="H100", timeout=180 * 60)
-def run_late4_answerce_inverted_panel(cells_per_subspace: int, summon_mode: str) -> str:
+def run_late4_answerce_inverted_panel(
+    cells_per_subspace: int,
+    summon_mode: str,
+    profile_components: bool = False,
+    keys: str = DEFAULT_KEYS,
+    placements: str = DEFAULT_PLACEMENTS,
+) -> str:
     import os
     import subprocess
     import sys
@@ -52,19 +60,27 @@ def run_late4_answerce_inverted_panel(cells_per_subspace: int, summon_mode: str)
     if summon_mode not in {"inverted", "inverted_static"}:
         raise ValueError(f"Unsupported summon mode: {summon_mode}")
     os.chdir("/root/sva")
+    base_args = list(BASE_ARGS)
+    base_args[base_args.index("--keys") + 1] = keys
+    base_args[base_args.index("--placements") + 1] = placements
     cmd = [
         sys.executable,
         "-u",
         "experiments/sva_late4_adapter_answer_benchmark.py",
-        *BASE_ARGS,
+        *base_args,
         "--summon-mode",
         summon_mode,
         "--inverted-cells-per-subspace",
         str(cells_per_subspace),
     ]
+    if profile_components:
+        cmd.append("--profile-components")
     print("late4_answerce_inverted_panel_h100_start", flush=True)
     print(f"summon_mode,{summon_mode}", flush=True)
     print(f"cells_per_subspace,{cells_per_subspace}", flush=True)
+    print(f"profile_components,{profile_components}", flush=True)
+    print(f"keys,{keys}", flush=True)
+    print(f"placements,{placements}", flush=True)
     print("command," + " ".join(cmd), flush=True)
     process = subprocess.Popen(
         cmd,
@@ -87,13 +103,22 @@ def run_late4_answerce_inverted_panel(cells_per_subspace: int, summon_mode: str)
 
 
 @app.local_entrypoint()
-def main(cells: str = "16,32", summon_mode: str = "inverted") -> str:
+def main(
+    cells: str = "16,32",
+    summon_mode: str = "inverted",
+    profile_components: bool = False,
+    keys: str = DEFAULT_KEYS,
+    placements: str = DEFAULT_PLACEMENTS,
+) -> str:
     call_ids: list[str] = []
     for cells_per_subspace in parse_cells(cells):
-        call = run_late4_answerce_inverted_panel.spawn(cells_per_subspace, summon_mode)
+        call = run_late4_answerce_inverted_panel.spawn(cells_per_subspace, summon_mode, profile_components, keys, placements)
         call_ids.append(call.object_id)
         print(f"function_call_id,cells={cells_per_subspace},{call.object_id}")
         print(f"dashboard,cells={cells_per_subspace},{call.get_dashboard_url()}")
     print(f"adapter_dir,{ADAPTER_DIR}")
     print(f"summon_mode,{summon_mode}")
+    print(f"profile_components,{profile_components}")
+    print(f"keys,{keys}")
+    print(f"placements,{placements}")
     return ",".join(call_ids)

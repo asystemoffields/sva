@@ -128,14 +128,19 @@ class SVALlamaAdapterTest(unittest.TestCase):
             budget=2,
             summon_mode="inverted_static",
             inverted_cells_per_subspace=2,
+            profile_components=True,
         ) as handle:
             with torch.no_grad():
                 first = model(input_ids=torch.tensor([[1, 2, 3, 4]]), use_cache=True)
                 second = model(input_ids=torch.tensor([[5]]), use_cache=True, past_key_values=first.past_key_values)
+                third = model(input_ids=torch.tensor([[6]]), use_cache=True, past_key_values=second.past_key_values)
             self.assertEqual(tuple(second.logits.shape), (1, 1, 64))
+            self.assertEqual(tuple(third.logits.shape), (1, 1, 64))
             summary = handle.stats.summary()
             self.assertGreater(summary["queries"], 0)
             self.assertGreater(summary["avg_refill_pool"], 0)
+            self.assertGreaterEqual(summary["avg_static_total_ms"], 0)
+            self.assertGreaterEqual(summary["avg_static_outer_total_ms"], summary["avg_static_total_ms"])
 
         self.assertIs(model.model.layers[1].self_attn, original)
 
