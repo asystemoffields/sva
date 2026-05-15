@@ -101,15 +101,17 @@ class SVALlamaAttention(nn.Module):
         refill_idx = candidate_idx.gather(dim=1, index=refill_order)
         refill_valid = candidate_valid.gather(dim=1, index=refill_order)
 
-        same_idx = refill_idx[:, :, None] == refill_idx[:, None, :]
-        prior = torch.triu(torch.ones(refill_count, refill_count, device=candidate_idx.device, dtype=torch.bool), diagonal=1)
-        duplicate = (same_idx & prior[None, :, :]).any(dim=1)
-        unique_valid = refill_valid & ~duplicate
-
         selected_count = min(budget, refill_count)
-        unique_scores = refill_scores.masked_fill(~unique_valid, torch.finfo(refill_scores.dtype).min)
+        sort_order = refill_idx.argsort(dim=1, stable=True)
+        sorted_idx = refill_idx.gather(dim=1, index=sort_order)
+        sorted_scores = refill_scores.gather(dim=1, index=sort_order)
+        sorted_valid = refill_valid.gather(dim=1, index=sort_order)
+        previous_idx = torch.cat([sorted_idx[:, :1] - 1, sorted_idx[:, :-1]], dim=1)
+        unique_valid = sorted_valid & (sorted_idx != previous_idx)
+
+        unique_scores = sorted_scores.masked_fill(~unique_valid, torch.finfo(sorted_scores.dtype).min)
         selected_scores, selected_order = unique_scores.topk(selected_count, dim=-1)
-        selected_idx = refill_idx.gather(dim=1, index=selected_order)
+        selected_idx = sorted_idx.gather(dim=1, index=selected_order)
         selected_valid = unique_valid.gather(dim=1, index=selected_order)
         return selected_idx, selected_scores, selected_valid, refill_count
 

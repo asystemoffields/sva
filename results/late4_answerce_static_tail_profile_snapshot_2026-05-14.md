@@ -21,6 +21,8 @@
 - Device-ready buffer profile: app `ap-DhUSCbWQo7sYjIXoqsPkE7`, function `fc-01KRMNNS891SC8PTKESTFM22AV`
 - Lazy product-code profile: app `ap-BkCPDQjfbk74c4iDrGeVUm`, function `fc-01KRMPSS8XH6TQRWD65QWWEWFS`
 - Lazy product-code full panel: app `ap-Ak0GWLBYnqboJuT3pox4qs`, function `fc-01KRMPWY003JDNE5NE2PHANCZS`
+- Stable-sort refill profile: app `ap-x6SD0vU75SEvkT2BXP7k7x`, function `fc-01KRMQE1MV69X582PERCQWS54T`
+- Stable-sort refill full panel: app `ap-z64VCTOe3Jnb8VszKkTrsK`, function `fc-01KRMQH10PYPB9JCF5BJEY2YHC`
 
 ## Result
 
@@ -75,8 +77,25 @@ On the full 24-case no-profile panel, lazy product-code maintenance reached:
 - Decode slowdown: `1.387741x`
 - Prefill slowdown: `25.280631x`
 
+Stable-sort refill then replaced the pairwise duplicate matrix in the refill path with a stable sort by token id, preserving the highest-scoring occurrence of each candidate token. On the 6-case profiling slice, adapted SVA averaged:
+
+- Static body: `1.062706 ms`
+- Projection: `0.085326 ms`
+- Key catalog/posting update: `0.110707 ms`
+- Outer total: `1.400587 ms`
+- Decode slowdown: `1.273390x`
+
+On the full 24-case no-profile panel, stable-sort refill reached:
+
+- Answer NLL delta: `-0.429207`
+- Answer KL to full: `0.038573`
+- Top-1 agreement: `0.916667`
+- Logit cosine: `0.992171`
+- Decode slowdown: `1.292738x`
+- Prefill slowdown: `24.939882x`
+
 ## Interpretation
 
-Tail buffering and lazy product-code maintenance are clean implementation wins: together they preserve the current quality target while cutting no-profile adapted decode slowdown from the duplicate-refill baseline `2.006075x` to `1.387741x`. The largest solved piece was per-token product-key/posting work in decode. The remaining wall-clock work is now mostly the static candidate/refill path and the exact/value gather path, while prefill remains much too expensive because it still builds and verifies SVA over the whole prompt.
+Tail buffering, lazy product-code maintenance, and stable-sort refill are clean implementation wins: together they preserve the current quality target while cutting no-profile adapted decode slowdown from the duplicate-refill baseline `2.006075x` to `1.292738x`. The largest solved piece was per-token product-key/posting work in decode. The remaining wall-clock work is now mostly the static candidate/refill path and the exact/value gather path, while prefill remains much too expensive because it still builds and verifies SVA over the whole prompt.
 
 Next target: push the fixed candidate path closer to kernel-shaped tensor operations, then attack prefill. The sharp decode test is whether static SVA can get below `1.0x` wall-clock at the same quality; the sharp long-context test is whether prefill/catalog construction can be amortized or chunked enough that SVA wins where full attention runs out of memory or context length.
