@@ -55,6 +55,23 @@ def make_tiny_bundle() -> SVAArtifactBundle:
 
 
 class SVALlamaAdapterTest(unittest.TestCase):
+    def test_static_refill_selects_unique_candidates(self) -> None:
+        candidate_idx = torch.tensor([[4, 4, 3, 3, 2, 1]])
+        candidate_scores = torch.tensor([[9.0, 8.5, 8.0, 7.5, 7.0, 6.0]])
+        candidate_valid = torch.ones_like(candidate_idx, dtype=torch.bool)
+
+        selected_idx, selected_scores, selected_valid, refill_count = SVALlamaAttention._top_unique_candidates(
+            candidate_idx,
+            candidate_scores,
+            candidate_valid,
+            budget=3,
+            refill_factor=2,
+        )
+
+        self.assertEqual(refill_count, 6)
+        self.assertEqual(selected_idx[selected_valid].tolist(), [4, 3, 2])
+        self.assertEqual(selected_scores[selected_valid].tolist(), [9.0, 8.0, 7.0])
+
     def test_patch_prefill_unpatch(self) -> None:
         model = make_tiny_model()
         bundle = make_tiny_bundle()
@@ -96,6 +113,29 @@ class SVALlamaAdapterTest(unittest.TestCase):
             self.assertEqual(tuple(second.logits.shape), (1, 1, 64))
             self.assertGreater(handle.stats.summary()["queries"], 0)
             self.assertGreater(handle.stats.summary()["avg_cell_visits"], 0)
+
+        self.assertIs(model.model.layers[1].self_attn, original)
+
+    def test_static_inverted_cached_decode(self) -> None:
+        model = make_tiny_model()
+        bundle = make_tiny_bundle()
+        original = model.model.layers[1].self_attn
+
+        with patch_llama_attention(
+            model,
+            bundle,
+            shortlist=4,
+            budget=2,
+            summon_mode="inverted_static",
+            inverted_cells_per_subspace=2,
+        ) as handle:
+            with torch.no_grad():
+                first = model(input_ids=torch.tensor([[1, 2, 3, 4]]), use_cache=True)
+                second = model(input_ids=torch.tensor([[5]]), use_cache=True, past_key_values=first.past_key_values)
+            self.assertEqual(tuple(second.logits.shape), (1, 1, 64))
+            summary = handle.stats.summary()
+            self.assertGreater(summary["queries"], 0)
+            self.assertGreater(summary["avg_refill_pool"], 0)
 
         self.assertIs(model.model.layers[1].self_attn, original)
 

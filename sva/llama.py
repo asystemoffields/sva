@@ -71,6 +71,39 @@ class SVALlamaAttention(nn.Module):
         self._cached_key_len = 0
         self._cached_signature: tuple[torch.device, torch.dtype, int, int, int] | None = None
 
+    @staticmethod
+    def _top_unique_candidates(
+        candidate_idx: torch.Tensor,
+        candidate_scores: torch.Tensor,
+        candidate_valid: torch.Tensor,
+        budget: int,
+        refill_factor: int = 2,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, int]:
+        candidate_width = int(candidate_idx.shape[1])
+        if candidate_width == 0 or budget <= 0:
+            empty_idx = candidate_idx[:, :0]
+            empty_scores = candidate_scores[:, :0]
+            empty_valid = candidate_valid[:, :0]
+            return empty_idx, empty_scores, empty_valid, 0
+
+        refill_count = min(candidate_width, max(budget, budget * refill_factor))
+        masked_scores = candidate_scores.masked_fill(~candidate_valid, torch.finfo(candidate_scores.dtype).min)
+        refill_scores, refill_order = masked_scores.topk(refill_count, dim=-1)
+        refill_idx = candidate_idx.gather(dim=1, index=refill_order)
+        refill_valid = candidate_valid.gather(dim=1, index=refill_order)
+
+        same_idx = refill_idx[:, :, None] == refill_idx[:, None, :]
+        prior = torch.triu(torch.ones(refill_count, refill_count, device=candidate_idx.device, dtype=torch.bool), diagonal=1)
+        duplicate = (same_idx & prior[None, :, :]).any(dim=1)
+        unique_valid = refill_valid & ~duplicate
+
+        selected_count = min(budget, refill_count)
+        unique_scores = refill_scores.masked_fill(~unique_valid, torch.finfo(refill_scores.dtype).min)
+        selected_scores, selected_order = unique_scores.topk(selected_count, dim=-1)
+        selected_idx = refill_idx.gather(dim=1, index=selected_order)
+        selected_valid = unique_valid.gather(dim=1, index=selected_order)
+        return selected_idx, selected_scores, selected_valid, refill_count
+
     def reset_catalog(self) -> None:
         self._cached_k_low = None
         self._cached_coarse_codes = None
@@ -395,11 +428,13 @@ class SVALlamaAttention(nn.Module):
             index=candidate_idx[..., None].expand(n_heads, candidate_idx.shape[1], self.serving.rank_dim),
         )
         candidate_scores = (candidate_low * qh_low[:, None, :]).sum(dim=-1) / math.sqrt(self.serving.rank_dim)
-        candidate_scores = candidate_scores.masked_fill(~candidate_valid, torch.finfo(candidate_scores.dtype).min)
-        rank_count = min(max_budget, int(candidate_idx.shape[1]))
-        rank_scores, rank_order = candidate_scores.topk(rank_count, dim=-1)
-        selected_idx = candidate_idx.gather(dim=1, index=rank_order)
-        selected_valid = candidate_valid.gather(dim=1, index=rank_order)
+        selected_idx, rank_scores, selected_valid, refill_count = self._top_unique_candidates(
+            candidate_idx,
+            candidate_scores,
+            candidate_valid,
+            max_budget,
+        )
+        rank_count = int(selected_idx.shape[1])
 
         if rank_count > 1:
             margin_ref = min(min_budget, rank_count) - 1
@@ -419,10 +454,7 @@ class SVALlamaAttention(nn.Module):
             budgets = torch.ones(n_heads, device=query.device, dtype=torch.long)
 
         budget_valid = torch.arange(rank_count, device=query.device)[None, :] < budgets[:, None]
-        same_idx = selected_idx[:, :, None] == selected_idx[:, None, :]
-        prior = torch.triu(torch.ones(rank_count, rank_count, device=query.device, dtype=torch.bool), diagonal=1)
-        duplicate = (same_idx & prior[None, :, :]).any(dim=1)
-        selected_valid = selected_valid & budget_valid & ~duplicate
+        selected_valid = selected_valid & budget_valid
 
         selected_keys = key_states[0].gather(
             dim=1,
@@ -442,6 +474,7 @@ class SVALlamaAttention(nn.Module):
                 int(self.layer_idx or 0),
                 {
                     "summoned": float(candidate_valid.float().sum().item()),
+                    "refill_pool": float(refill_count * n_heads),
                     "exact_scored": float(selected_valid.float().sum().item()),
                     "verified": float(selected_valid.float().sum().item()),
                     "queries": float(n_heads),

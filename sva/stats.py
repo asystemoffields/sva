@@ -37,6 +37,7 @@ class SVAStats:
         return {
             "queries": self.totals.get("queries", 0.0),
             "avg_summoned": self.ratio("summoned"),
+            "avg_refill_pool": self.ratio("refill_pool"),
             "avg_exact_scored": self.ratio("exact_scored"),
             "avg_verified": self.ratio("verified"),
             "avg_cell_visits": self.ratio("cell_visits"),
