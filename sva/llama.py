@@ -63,10 +63,10 @@ class SVALlamaAttention(nn.Module):
         self.serving = serving
         self.stats = stats
 
-        self.register_buffer("sva_q_proj", layer_artifacts.q_proj.detach().clone(), persistent=False)
-        self.register_buffer("sva_k_proj", layer_artifacts.k_proj.detach().clone(), persistent=False)
+        self.register_buffer("sva_q_proj", layer_artifacts.q_proj.detach().float().clone(), persistent=False)
+        self.register_buffer("sva_k_proj", layer_artifacts.k_proj.detach().float().clone(), persistent=False)
         self.register_buffer("sva_logit_scale", layer_artifacts.logit_scale.detach().float().clone(), persistent=False)
-        self.register_buffer("sva_coarse_codebooks", layer_artifacts.coarse_codebooks.detach().clone(), persistent=False)
+        self.register_buffer("sva_coarse_codebooks", layer_artifacts.coarse_codebooks.detach().float().clone(), persistent=False)
         self._cached_k_low: torch.Tensor | None = None
         self._cached_coarse_codes: torch.Tensor | None = None
         self._cached_postings: torch.Tensor | None = None
@@ -742,6 +742,11 @@ class SVALlamaPatcher:
             self._validate_layer_shapes(layer_idx, layer.self_attn, artifacts)
             self.originals[layer_idx] = layer.self_attn
             replacement = SVALlamaAttention(layer.self_attn, artifacts, self.serving, self.stats)
+            try:
+                replacement_device = next(layer.self_attn.parameters()).device
+            except StopIteration:
+                replacement_device = artifacts.q_proj.device
+            replacement.to(device=replacement_device)
             replacement.train(layer.self_attn.training)
             layer.self_attn = replacement
         return self
