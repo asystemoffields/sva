@@ -2,7 +2,9 @@
 
 Every experiment in this repo ends in a dated snapshot markdown file recording the run
 configuration, the numbers, a readout, and the next step. This directory holds all 80 of
-them. They were written in real time (2026-05-13 to 2026-05-14) and are kept verbatim;
+them. They were written in real time (2026-05-13 to 2026-05-14) and are kept verbatim
+(so internal `results/...` snapshot paths refer to this directory, and
+`results/modal_runs/...` logs are local-only and gitignored);
 some interpretations were later revised by follow-up runs (most notably the
 attention-input normalization fix, see `normfix_socket_audit_snapshot_2026-05-13.md`).
 
