@@ -1,488 +1,162 @@
-# Summon-Verify Attention
+# Summon-Verify Attention (SVA)
 
-Summon-Verify Attention (SVA) is a candidate sparse replacement for transformer attention.
+SVA is a sparse replacement for transformer attention built around content-addressed
+lookup: every key/value page **writes** itself into cheap lookup tables, a query
+activates the same addresses and **summons** a small candidate set, and exact
+dot-product attention **verifies** only those candidates. The write address and the
+read address are the same object — the pages summon themselves, so there is no
+separately learned retriever to keep consistent with the cache. In its current form,
+SVA reversibly patches Llama-family Hugging Face attention layers (keeping the
+pretrained Q/K/V/O projections, RoPE, norms, MLPs, and logits) with frozen per-layer
+artifacts: a rank-64 learned Q/K scorer served through coarse product-quantized codes,
+followed by an exact attention verifier over the shortlist. Everything below was
+measured on `HuggingFaceTB/SmolLM2-135M-Instruct` and synthetic million-token caches,
+on H100 with stock PyTorch (no custom kernels).
 
-The idea is simple:
+## Headline results
 
-1. Each page writes itself into several cheap content-addressed lookup tables.
-2. A query activates the same addresses and summons a small candidate set.
-3. A verifier runs exact dot-product attention over only the summoned candidates.
+| Result | Setup | Numbers |
+| --- | --- | --- |
+| All 30 attention layers replaced, calibration context | SmolLM2-135M, 2048 tokens, `4x64` coarse PQ, shortlist 1024, budget 512 | loss delta `0.000000`, KL `0.000362`, top-1 agreement `99.46%`, verified top-16 recall `0.9997` |
+| All 30 layers, frozen artifacts, held-out documents, full configured window | 8192 tokens, `2x256` artifact, shortlist 2048, budget 512 | KL `0.000481`, top-1 `99.98%`, top-16 recall `0.9987`, 16x fewer exact scores and value reads |
+| Late-layer socket at 4x the training window | 32768-token passkeys, SVA in layers 26-29 only, scan summon 8192/2048, 9 key/placement cases | answer KL `0.005547`, top-1 `96.8%`, answer NLL delta `0.011` |
+| Tight budget + 110k-param distilled adapter | 32768 tokens, late4 socket, 512/128, 24 held-out passkey cases | answer KL `0.0319`, top-1 `94.6%`, **256x** fewer decode exact reads in SVA layers (with indexed static summon instead of scan: KL `0.0386`, top-1 `91.7%`, decode slowdown 1.29x) |
+| Million-token decode lookup, no custom kernels | synthetic 1M-key cache, H100, q=1, 2048/512 | `0.65 ms`/query (`1x256` codes) to `1.03 ms` (`4x64`) vs `2.08 ms` full attention |
 
-In the current toy tests, the write address and read address are the same object. That is the key design move: the memory does not need a separate librarian to learn where every page went.
+Sources: [`normfix_socket_audit`](docs/snapshots/normfix_socket_audit_snapshot_2026-05-13.md),
+[`full_deployment_8192`](docs/snapshots/full_deployment_8192_snapshot_2026-05-14.md),
+[`passkey_late4_robustness`](docs/snapshots/passkey_late4_robustness_snapshot_2026-05-14.md),
+[`late4_answerce_broad_panel`](docs/snapshots/late4_answerce_broad_panel_snapshot_2026-05-14.md),
+[`late4_answerce_static_tail_profile`](docs/snapshots/late4_answerce_static_tail_profile_snapshot_2026-05-14.md),
+[`compact_summon_frontier`](docs/snapshots/compact_summon_frontier_snapshot_2026-05-14.md).
+Every number in this README has a dated snapshot in [`docs/snapshots/`](docs/snapshots/)
+with the full run configuration.
 
-## Quick Start
+## How it works
 
-```powershell
-python -m venv .venv
-.\\.venv\\Scripts\\Activate.ps1
+1. **Write.** Each key projects into a learned rank-64 space (per layer, per head) and
+   is assigned coarse product-quantization codes (e.g. `2` subspaces x `256` codewords).
+   The codes are the key's addresses. Artifacts — low-rank Q/K projections, per-head
+   logit scales, coarse codebooks — are trained once against full-attention top-k
+   labels on a calibration stream, then frozen.
+2. **Summon.** A query projects through the same learned map and scores the coarse
+   codes to shortlist candidates (e.g. 2048 of 8192+ cached keys), either by vectorized
+   scan or through a static inverted index over the code cells. The query reads the
+   addresses the keys wrote — no separate retriever.
+3. **Verify.** Exact attention (real Q·K, softmax, value aggregation) runs over only
+   the top `budget` summoned candidates (e.g. 512, or 128 in the tight-budget socket).
+   The verifier is exact, so quality failures are always summon-side and measurable as
+   top-k recall.
+
+**The deployment finding:** replacing all layers is essentially lossless at the 8k
+training window but drifts at 32k, and the drift enters through early-layer prefill —
+replacing layers 0-25 alone reproduces nearly all of the all-layer damage (KL `1.53`
+vs `1.56`), while replacing only layers 26-29 stays at KL `0.0055`. The production
+shape is therefore: full attention builds the early/middle hidden-state stream, SVA
+replaces the late layers where decode reads are concentrated, and a small residual
+adapter (distilled on answer-token logits) recovers tight budgets. A harness lesson
+worth keeping: an apparent "fragile layer" result was actually an interface bug
+(artifacts trained on pre-norm hidden states, served on `input_layernorm` outputs) —
+see the [normfix snapshot](docs/snapshots/normfix_socket_audit_snapshot_2026-05-13.md).
+
+## Quickstart
+
+```bash
+python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
-python experiments\\sva_kill_test.py --task binding --trials 2 --tables 8 16 24 --bits 10 --budget 16 --query-noise 0.05 --logit-scale 16
 ```
 
-## Current Result
+Patch a model with the bundled artifact (the `sva/` package is the production path):
 
-On the 8192-page binding task with a 16-candidate verifier budget, SVA reaches near-full-attention top-1 recovery while reading only 16 candidates:
+```python
+from transformers import AutoModelForCausalLM, AutoTokenizer
+from sva import patch_llama_attention
 
-```text
-method              top1    cos_teacher  avg_candidates
-full_attention      1.0000  1.0000       8192.0
-coarse_bank_verify  0.5552  0.5820       15.7
-sva_16x10           0.9907  0.9721       16.0
-sva_24x10           0.9995  0.9859       16.0
+model_id = "HuggingFaceTB/SmolLM2-135M-Instruct"
+model = AutoModelForCausalLM.from_pretrained(model_id, attn_implementation="eager").eval()
+tokenizer = AutoTokenizer.from_pretrained(model_id)
+
+patcher = patch_llama_attention(
+    model,
+    "results/hf_artifacts/sva-smollm2-135m-2x256-v1",
+    shortlist=2048,
+    budget=512,
+)
+# ... model.generate(...) as usual; cached decode reuses the SVA key catalog ...
+print(patcher.stats.summary())
+patcher.unpatch()  # or use `with patch_llama_attention(...) as patcher:`
 ```
 
-The newest robustness result is adjacent-bucket probing plus a cheap prefilter. Under noisy binding lookup, plain `sva_16x10` reached `top1=0.7124`; `sva_probe1_16x10` reached `top1=0.9263`, matching the full-attention teacher's `0.9287` on that setup while verifying 16 candidates.
+Run the browser chat demo (serves immediately; downloads SmolLM2-135M on first message):
 
-With a 32-dimensional prefilter, `sva_probe1_prefilter32d128_16x10` kept `top1=0.9233` while reducing exact full-dimensional scoring from about 968 summoned pages to 128. That makes the working shape: summon broadly, cheap prefilter, exact verify.
-
-The causal-cache test is now positive too. At 1024 tokens, `sva_causal_probe1_prefilter32d128_24x12` reached `top1=0.9957` with about 54 summoned prior pages on average, while full causal attention read about 512 prior pages on average in the same setup.
-
-The pretrained socket test is now the sharpest signal. In `HuggingFaceTB/SmolLM2-135M-Instruct`, SVA can replace every Llama attention layer's score matrix while keeping the pretrained Q/K/V/O projections, RoPE, norms, MLPs, and logits. The best first H100 sweep matched full attention closely on short prompts:
-
-```text
-setting                         loss_delta  KL_to_full  top1_agree  logit_cos  avg_verified
-32 tables, 10 bits, probe 2     0.093750    0.188110    0.783883    0.974020   20.432 / 53
+```bash
+python demo/local_chat_server.py
+# open http://127.0.0.1:8765
 ```
 
-The longer-context H100 sweep strengthened that result. At 512 tokens, `64 tables / 10 bits / probe 2 / budget 128` reached `loss_delta=0.015625`, `KL=0.009582`, `top1_agreement=0.970646`, and top-16 full-attention key recall `0.976191`.
-
-The next research step is to make the summoned candidate set smaller. In the current socket harness, `avg_summoned` is the broad lookup set; without a prefilter, that is also the exact-scored set. At 512 tokens the strongest setting summons about 221 candidates before the post-score top-k budget.
-
-The first random-projection prefilter reduced exact scoring but exposed the next bottleneck. At 256 tokens, `prefilter_dim=48 / prefilter_budget=64` cut exact scoring from about 113 candidates to 55 with `loss_delta=0.062500`. At 512 tokens, the same shape cut exact scoring from about 223 to 60 with `loss_delta=0.125000`. The next invention target is a better cheap ranker inside the summoned set.
-
-The full-window real-QK address sweep now matches SmolLM2's configured context window: `max_position_embeddings=8192`, `seq_len=8192`. Random high-bit binary addresses are a kill for the million-token version of that exact address function. Aggregate top-16 recall at `14 bits / 128 tables / radius 2` was `0.838557`, but the random million-token candidate estimate was about `282k`. At `24 bits / 128 tables / radius 2`, the estimate falls to about `1.1k`, but top-16 recall was only `0.092231`.
-
-The million-token pressure simulation sharpened that result using empirical hit density from real 8192-token SmolLM2 Q/K samples. The best aggregate recall was `20 bits / 256 tables / radius 2` at `0.384905`, but it projected to about `39.6k` average candidates at a million tokens, with p95 about `129k`. In the rough 128-1024 candidate band, aggregate recall stayed around 1-2%. The next work is a learned or model-aware address code.
-
-The learned compressed-ranker test is the first strong follow-up. Training a small asymmetric Q/K ranker per layer/head on held-in query positions and evaluating held-out query positions reached aggregate top-16 recall `0.759781` with a 64-dimensional score and 256 verifier candidates, and `0.848338` with 512 verifier candidates. The next risk is held-out text generalization, then serving the learned score through an addressable lookup.
-
-The held-out text test preserved the signal. Training on one 8192-token stream and evaluating on a reversed 8192-token stream reached aggregate top-16 recall `0.749752` with rank 64 and 256 verifier candidates, and `0.835488` with 512 verifier candidates. The next invention target is sublinear lookup for that learned compact score.
-
-The first learned-score serving attempt tested random-hyperplane LSH over the rank-64 space. It is a kill for that specific lookup geometry. The strongest aggregate row reached only `0.233429` verified top-16 recall while projecting to about `38.6k` average candidates at a million-token context; in the rough few-hundred-candidate band, recall stayed around `0.013`.
-
-Score-aware IVF routing improved the serving shape. Single-write k-means centroids over learned low-rank keys reached `0.234422` recall at about `3.5k` projected million-token candidates, and about `0.095-0.102` recall in the few-hundred-candidate band. That is much better than sign-LSH at the same scale, but still far below the learned ranker's all-key recall. The next target is multi-write or supervised routing: give each key more than one good way to be summoned, or train the catalog cells directly against top-key recall.
-
-Multi-write IVF answered the first half of that branch. Giving each key `2,4,8` nearest-centroid writes modestly improved some local settings, but the best few-hundred to low-thousand candidate row reached `0.105422` recall at about `898` projected million-token candidates, close to single-write IVF's `0.102477` recall at about `783`. The highest-recall multi-write row reached `0.147647` at about `1,564` projected candidates, below single-write IVF's `0.166574` at about `1,666`. The current target is supervised routing or asymmetric compressed scoring: make the catalog optimize for top-key recall directly.
-
-The first supervised query-cell router confirms that supervised routing can move recall, but the low-resolution cells are too dense. It reached `0.655816` aggregate recall at about `167k` projected million-token candidates, while the smallest setting reached only `0.039109` recall at about `3.7k` projected candidates. The next run raises the cell count to test whether the supervised signal survives in the `128-1024` projected-candidate band.
-
-The high-resolution supervised router answered that directly. With `2048-4096` cells and small write/probe counts, it reached the projected candidate band but recall collapsed: `4096 cells / 4 writes / 2 probes` reached `0.012680` recall at about `999.5` projected candidates, and `2048 cells / 4 writes / 2 probes` reached `0.042721` at about `3.6k` projected candidates. The next branch is score-preserving compressed lookup, such as product-quantized or asymmetric scoring over the learned rank-64 keys.
-
-Product-quantized learned-score lookup is the new best serving signal. The exact learned rank-64 scorer reached `0.754046` recall at a 256-candidate verifier budget and `0.839084` at 512. PQ with `16 subspaces / 256 codewords` reached `0.704985` at 256 and `0.803184` at 512, while `8 subspaces / 256 codewords` reached `0.647166` at 256 and `0.755937` at 512. This preserves most of the learned-ranker signal while replacing full low-rank key scoring with compact code lookups.
-
-The first synthetic million-token throughput check is plausible but still costly if used everywhere. On H100 with stock PyTorch gather plus top-k, `8 x 256` PQ over 9 heads scanned one million keys in about `2.2 ms` for one query; `16 x 256` took about `4.5 ms`. The next target is coarse-to-fine PQ so the full scan can be cheaper and the high-quality score only runs on a shortlist.
-
-Coarse-to-fine PQ preserved the fine-PQ signal. On held-out reversed 8192-token SmolLM2 streams, `4x64` coarse PQ shortlisting to `4096`, then `16x256` fine PQ and a `512` verifier budget, reached `0.799541` aggregate top-16 recall versus `0.801169` for full `16x256` fine-PQ scoring. With a `2048` shortlist it reached `0.789078`.
-
-The staged path is also fast in the first direct million-token benchmark. On H100 with stock PyTorch gather plus top-k, `4x64 -> 16x256` coarse-to-fine PQ took about `1.91 ms` for one query and about `3.03 ms` for four queries over one million keys and 9 heads. That is faster than the previous full `8x256` scan while preserving nearly all of the full `16x256` fine-PQ recall at the larger shortlist. The next target is training the coarse stage against the fine-PQ winners so the `1024-2048` shortlist range can carry the same recall.
-
-The first supervised coarse-stage attempt was a regression. Training a separate coarse ranker against the broad top-512 fine-PQ candidate set reached only `0.758293` aggregate recall at shortlist `4096`, below the unsupervised coarse-to-fine baseline's `0.803509`. The next test narrows the coarse target to attention top-16 labels.
-
-The attention-label supervised coarse run recovered the signal and produced a small improvement. With attention top-16 labels, supervised `4x64` coarse PQ reached `0.802688` aggregate recall at shortlist `4096`, compared with `0.802021` for full fine PQ and `0.800967` for unsupervised `4x64` coarse-to-fine in the same run. At shortlist `2048`, it reached `0.797464` versus `0.792085` unsupervised. The result points toward sharper survival targets, while the next larger step is likely optimizing the coarse code inside the fine-ranker space instead of training a separate coarse ranker.
-
-Attention-weighted coarse codebooks tested that next branch. Fitting the coarse codebook in the fine-ranker space with attention top-16 key boosts helped most at the tightest shortlist: `4x64` with boost `4` reached `0.773717` at shortlist `1024`, above `0.764865` unsupervised and above the separate supervised coarse ranker's `0.769128`. At `2048`, it reached `0.794999`, a smaller lift over unsupervised and below the separate supervised ranker's `0.797464`. At `4096`, it tied unsupervised. The next combined test is to train the separate coarse ranker, then fit attention-weighted codebooks inside that coarse space.
-
-The combined test stacked those gains. Training the supervised rank-64 coarse scorer and then fitting attention-weighted `4x64` codebooks inside that coarse space reached `0.803184` at shortlist `4096`, `0.799882` at shortlist `2048`, and `0.776445` at shortlist `1024`. This is the current best serving candidate for the learned-ranker branch. The next pressure test is shorter shortlists, especially `512` and `768`, with the same verifier budget.
-
-The tight-shortlist pressure test set the current practical band. Weighted supervised `4x64` reached `0.776445` at shortlist `1024`, `0.757239` at `768`, and `0.713759` at `512`. The method still improves over unweighted and unsupervised coarse PQ at each point, but the drop below `1024` is steep. The next target is a shortlist-aware coarse objective that trains for top-key survival at `512-1024` directly.
-
-Hard-negative coarse training directly attacked that shortlist-survival objective. After `80` hard-negative steps, weighted hard-supervised `4x64` reached the strongest current mainline result. A mining-pool sweep found that pool `512` with boost `4` was best across aggregate shortlists: `0.827179` at shortlist `512`, `0.831303` at `768`, `0.834108` at `1024`, and `0.820685` at `2048`, versus exact learned-ranker recall of `0.839332` and full fine-PQ recall of `0.802021`.
-
-The handoff diagnostic isolated the `2048` shortlist dip. On the same hard-negative candidate sets, coarse-only survival rose from `0.906095` at shortlist `1024` to `0.959279` at `2048`, and exact rank-64 rescoring stayed high at `0.847873` and `0.847811`. Fine-PQ rescoring fell from `0.834077` to `0.820669`. The next target is a cheap exact rank-64 middle stage: coarse PQ summon, exact low-rank rescore over roughly `1024-2048` candidates, then full attention verification over the final `512`.
-
-The first synthetic million-token benchmark supports that target. With `4x64` coarse PQ over one million keys, exact rank-64 rescoring took about `1.00 ms` for one query and `2.16 ms` for four queries at shortlist `2048`, using about `1.15 GB` of bf16 rank-key memory for `9` heads. The exact rescore block itself was about `0.12 ms`; the measured cost is mostly coarse scan plus shortlist top-k. The next quality test is to socket this three-stage path into the SmolLM2 attention replacement harness.
-
-The first three-stage socket result initially appeared to find a layer-specific failure mode, but that result was traced to a harness/interface bug. Artifact training was deriving Q/K routes from layer-boundary hidden states, while Hugging Face's Llama attention receives `input_layernorm(hidden_states)`. After applying the same input-layernorm before artifact Q/K extraction, the apparent fragile-layer behavior disappeared.
-
-The corrected all-layer SmolLM2 socket result is now the strongest signal. At `seq_len=2048`, with `4x64` coarse PQ, `coarse_shortlist=1024`, and `budget=512`, replacing all 30 attention layers reached `loss_delta=0.000000`, `KL=0.000362`, `top1_agreement=0.994626`, `logit_cosine=0.997908`, and verified top-16 recall `0.999689` under teacher artifact training. Progressive artifact training was similarly strong: `KL=0.000361`, `top1_agreement=0.996092`, and verified top-16 recall `0.999703`.
-
-The first frozen-artifact deployment proxy also passed at `seq_len=2048`: artifacts trained on the base calibration stream stayed effectively lossless on paragraph-order shifts (`rotate`, `reverse`, and `odds_evens`). That is a useful leakage audit.
-
-The first full deployment benchmark is also positive. Artifacts frozen from 4096-token calibration documents were evaluated on held-out documents at 2048 and 4096 tokens. At `context=2048`, `coarse_shortlist=1024`, and `budget=512`, the all-layer socket reached `loss_delta=0.000000`, `KL=0.000165`, `top1_agreement=0.999145`, `logit_cosine=0.998157`, and verified top-16 recall `0.999083`. At `context=4096`, the same setting reached `loss_delta=0.000488`, `KL=0.000244`, `top1_agreement=0.999511`, `logit_cosine=0.990862`, and verified top-16 recall `0.995900`.
-
-The full-window held-out benchmark preserves the signal at SmolLM2's configured `8192` token context. At `context=8192`, `coarse_shortlist=1024`, and `budget=512`, the all-layer socket reached `loss_delta=0.000732`, `KL=0.000564`, `top1_agreement=0.999756`, `logit_cosine=0.984127`, and verified top-16 recall `0.991471`. At `coarse_shortlist=2048` and `budget=512`, it reached `loss_delta=0.000794`, `KL=0.000481`, `top1_agreement=0.999786`, `logit_cosine=0.989240`, and verified top-16 recall `0.998707`.
-
-The cached-decode benchmark splits quality from serving mechanics. With key-side low-rank catalogs and product codes precomputed once per layer, `context=8192`, `coarse_shortlist=2048`, and `budget=512` reached verified top-16 recall `0.998094`; `1024/512` reached `0.988018`. The current PyTorch lookup path is still slower than optimized full attention at 8192, around `3.1 ms` per decode lookup versus about `0.3 ms` for full attention in this harness, so the next systems frontier is a synthetic million-token cached decode test and then a fused/custom lookup path.
-
-The synthetic million-token cached-decode benchmark found the first no-custom-kernel speed opening. Vectorized PyTorch SVA over one million keys took about `1.02 ms` for one decode query at `2048/512`, versus about `2.09 ms` for full attention. At four queries it was roughly parity, and at sixteen queries it lost (`7.13 ms` versus `3.44 ms`) because coarse score construction and top-k scale with the query batch. The next speed target is SVA itself: train for tighter `512-1024` shortlist survival and make the summon budget adaptive by layer, head, and query.
-
-The tight-summon frontier shows that shortlist size is not the main no-kernel speed lever yet. Tightened artifact training at `context=8192` reached verified top-16 recall `0.962761` at `512/256`, `0.981497` at `768/256`, `0.989732` at `1024/256`, `0.995918` at `1536/256`, and `0.997870` at `2048/256`. At one million synthetic keys, vectorized SVA stayed around `0.96-0.97 ms` for one query across `512` through `2048` shortlists, while full attention was about `2.05-2.10 ms`. The cost is dominated by the full-cache coarse scan and top-k path, not the verifier.
-
-Compact coarse-code sweeps found the first clear no-custom-kernel speed lever. At `context=8192`, `2x256` coarse codes reached verified top-16 recall `0.988336` at `1024/256`, `0.995258` at `1536/256`, and `0.998271` at `2048/512`, close to `4x64` while reducing one-query million-token latency from about `1.03 ms` to about `0.78 ms`. The faster `1x256` branch reached `0.995985` at `2048/512` and cut one-query latency to about `0.65 ms`; it also reduced `q=16` latency from `7.13 ms` to about `4.00 ms`.
-
-The first deployable artifact bundle now exists locally at `results/hf_artifacts/sva-smollm2-135m-2x256-v1`. It contains all 30 layers for the `2x256` profile, with `bfloat16` low-rank projections and coarse codebooks, manifest metadata, default `2048/512` serving settings, and a small README. The bundle reloads through `experiments/sva_artifact_io.py` and is ready to publish as a Hugging Face artifact repo or GitHub release asset.
-
-The first production-facing adapter now exists under `sva/`. It loads the artifact bundle, validates tensor shapes, reversibly patches Llama-family Hugging Face attention layers, records runtime stats, and reuses SVA key catalogs across cached decode steps. A local browser chat demo lives at `demo/local_chat_server.py`.
-
-The 8k head-to-head result separates method quality from serving speed. At `context=8192`, `shortlist=2048`, and `budget=512`, the all-layer SVA socket reached `loss_delta=0.000907`, `KL=0.000446`, `top1_agreement=0.999695`, and `logit_cosine=0.991188`, with `16x` fewer exact scores and value reads. The current stock PyTorch adapter is slower wall-clock at 8k, so method-level wins have to come from longer contexts, richer catalogs, or a much tighter lookup implementation.
-
-The first long-context extension proxy found the current boundary. With the frozen 8k `2x256` artifact, fixed `2048/512` recall falls from `0.977778` at 8k to `0.848611` at 32k, `0.657639` at 128k, and `0.365885` at 1M. Scaling the shortlist and verifier budget recovers the 128k case: `16384/2048` reached `0.943056` verified top-16 recall with `64x` fewer exact scores and value reads. At 1M, the same setting reached `0.645399`, which points to catalog capacity as the next method target.
-
-The first language-level passkey benchmark is a sharper stress test. With the passkey at the beginning and the query at the end, adaptive inverted decode was too aggressive: at `4096` tokens it added `3.776614` answer NLL versus full attention while verifying about `32` tokens per decode query. Fixed scan decode with `2048/512` recovered the short-context behavior: answer NLL deltas were `0.076570` at `4096` and `0.163233` at `8192`, with `8x` and `16x` fewer value reads. Scaling to `8192/2048` recovered the longer rows too: answer NLL delta was `-0.016004` at `16384` and `0.116894` at `32768`, with `8x` and `16x` fewer value reads. Exact-string retrieval looks like a budget-policy problem through 32k, while the current prefill path remains the obvious systems bottleneck.
-
-The first block-elevator benchmark tested a more kernel-shaped SVA path: summon contiguous blocks, then let selected blocks compute exact local softmax partials where they sit. Averaged over layers `0`, `15`, and `29`, token SVA with `2048` individual value reads fell to `output_cosine=0.943327` and `relative_error=0.456380` at `131072` synthetic tokens. Centroid block SVA with the same `2048` value reads reached `output_cosine=0.966790` and `relative_error=0.276183`, while reducing scattered segments from `2048` tokens to `32` contiguous blocks. At `8192`, token SVA remains stronger; at longer contexts, block statements look like a useful way to preserve diffuse value output.
-
-The first token/block hybrid run found complementarity. With the same `2048` average value reads at `131072`, token SVA reached `output_cosine=0.944623` and `relative_error=0.457266`; block `64 x 32` reached `0.969223` and `0.270862`; an oracle selector between token and block reached `0.986559` and `0.165284` while reducing scattered segments from `2048` to about `853`. A cheap entropy selector improved exact-key survival over block-only but left much of the oracle gap open. The next target is a learned selector, then a hybrid serving-shaped passkey benchmark.
-
-The learned selector is positive on held-out synthetic layer outputs. A tiny MLP trained on cheap pre-verifier features reached `train_accuracy=0.943673` and transferred to a different held-out document. At `131072`, learned `128 x 16` improved relative error from token SVA's `0.570985` and block-only `0.250723` to `0.179351`, with about `599` average contiguous/scattered segments instead of `2048` scattered token segments. At `32768`, learned `128 x 16` reached `relative_error=0.106382`, close to the oracle's `0.096472`. The next sharp test is language-facing: socket this dispatcher into the passkey benchmark and see whether it preserves exact retrieval while improving long-context diffuse output.
-
-The evidence-haystack benchmark now measures summon quality directly. Multi-anchor summon improves evidence survival: at `8192` start placement, full-budget anchors lift summoned key survival from `0.592593` with one anchor to `0.962963` with eight anchors, and at `32768` end placement from `0.222222` to `0.777778` with sixteen anchors. The next bottleneck is verifier rerank: at `32768` end placement the key is summoned in `0.777778` of head/layer cases but survives final verification in `0.444444`. Split-budget anchors are useful when evidence is close to the query: `8192` end placement kept exact key survival at `1.000000` while verifying about `435` tokens, an `18.8x` read reduction.
-
-The evidence-aware rerank sweep found a method-level improvement and a sharper next target. At `16384`, current-query rerank plus radius `32` lifted aggregate verified key survival from `0.461420` to `0.614198` while keeping average exact score work below full attention. At `32768`, expansion lifted aggregate candidate key coverage to `0.601852`, but verified key survival reached only `0.307098`; individual-token rerank is now the main loss point. The next test is span/block statements that preserve local evidence neighborhoods after summon.
-
-The span-statement test confirms that local statements are a useful verifier shape, while also sharpening the summon problem. At `8192`, radius `32` improved aggregate output cosine from `0.991612` to `0.998145` and reduced scattered segments from about `273` to about `8`. At `16384`, statement-style verification still reached about `0.992-0.993` cosine in the best efficient rows. At `32768`, quality dropped into the `0.951-0.972` range and key survival stayed low, so the main pressure returns to catalog quality.
-
-The rotation diagnostic found a large codebook-quality opening. Against the frozen artifact codebooks, aggregate teacher top-16 recall was `0.771888` at budget `512`, `0.837511` at `1024`, and `0.893808` at `2048`. Refit codebooks lifted those to `0.837637`, `0.884145`, and `0.923472`, while raising PQ score cosine from `0.870095` to about `0.9576`. Hadamard and signed-Hadamard refits were essentially tied with plain refit, so the next deployable test is held-out calibration-time codebook refresh rather than relying on eval-key refit.
-
-Held-out codebook refresh confirmed that the codebook-quality opening generalizes. At `32768`, the frozen artifact reached teacher top-16 recall `0.563169/0.657407/0.752450` at budgets `512/1024/2048`. Calibration-fit codebooks lifted those to `0.635887/0.726002/0.809995`, close to the eval-refit upper bound `0.645553/0.734592/0.816090`. Code entropy moved with that win: normalized entropy rose from `0.718895` to about `0.978`, while the largest average code bucket fell from `0.230200` to about `0.0144`. At `8192`, the frozen artifact remains best, so the next deployable shape is context-matched profiles plus a simple context-length router.
-
-The first long-context refreshed artifact is now exported at `results/hf_artifacts/sva-smollm2-135m-2x256-longctx-refresh-v1`. It reloads through the production artifact loader and reproduces the long-context refresh result: at `32768`, it reaches teacher top-16 recall `0.630588/0.725071/0.809860` at budgets `512/1024/2048`, with score cosine `0.945643` and normalized code entropy `0.978694`. At `8192`, it trails the original artifact, so the next production test is profile routing: original artifact for 8k, refreshed artifact for 16k/32k.
-
-The first language-facing profile-router test is a useful negative. With the original profile at `8192`, the refreshed profile at `16384/32768`, and the larger `8192/2048` scan policy, passkey answer NLL deltas were `0.070947`, `0.042013`, and `0.138533`. The earlier original-profile scale-out row was slightly better at `16384/32768` (`-0.016004` and `0.116894`), so aggregate recall and entropy gains have not yet converted into passkey language gains. The next profile should be evidence-aware: weight codebook fit toward attention top-k and exact evidence neighborhoods, while recording entropy only as a collapse diagnostic.
-
-Attention-weighted refresh is the first positive evidence-aware catalog result. At `32768`, plain refresh reached teacher top-16 recall `0.635887/0.726002/0.808793` at budgets `512/1024/2048`; strong attention-weighted refresh reached `0.677083/0.762297/0.836887`, also above the identity eval-refit ceiling `0.645526/0.734565/0.816081`. Entropy and score cosine moved down while teacher recall moved up, confirming that the objective is evidence survival, with entropy only a diagnostic.
-
-The language-facing attention-weighted profile router gives a mixed result. With original profile at `8192`, strong attention-weighted profile at `16384/32768`, and scan `8192/2048`, passkey answer NLL deltas were `0.070947`, `0.024752`, and `0.152243`. This improves over the plain refreshed profile at `16384` (`0.042013` to `0.024752`) but regresses at `32768` (`0.138533` to `0.152243`).
-
-The mixed-strength attention-weighted sweep sharpened the diagnosis. Boost `2` is best at `16384` (`0.021849` NLL delta), but lower boosts make `32768` worse: boost `1/2/4` reached `0.334068/0.480951/0.593440`, while strong effective boost `16` reached `0.152243`.
-
-The passkey key-survival diagnostic points to prefill drift. At `32768`, final-query key survival is low for every profile but close across profiles: original `0.148148`, plain refresh `0.137037`, boost2 `0.133333`, strong attention `0.140741`. Since verified survival equals summoned survival in this setup, the final-query loss is summon-side, but the profile differences are too small to explain the larger language NLL spread. The next sharp move is measuring full-vs-SVA prefill drift directly: first answer-token NLL, final-prompt logit KL/cosine, and profile-specific prefill stats.
-
-The prefill-drift benchmark confirms the long-context failure mode. At `32768`, first-answer-token NLL deltas before decoding were already large: original `1.037624`, plain refresh `1.684878`, boost2 `2.515614`, and strong attention `0.992831`. Strong attention has the best 32K final-prompt logit cosine (`0.970458`), but KL remains high (`2.148224`). The next implementation target is layer-selective socketing in the production adapter, so fragile layers can stay full attention while tolerant layers use SVA.
-
-Layer-selective prefill drift gives the strongest socketing signal so far. With the strong attention-weighted profile at `32768`, all-layer SVA had first-answer-token NLL delta `0.992831` and KL `2.148224`. Socketing only layers `20-29` cut that to NLL delta `0.035455` and KL `0.019850`, with full top-1 agreement and logit cosine `0.999362`. The next check is the full answer benchmark for `late10`, because the current signal is at the final prompt position before multi-token answer decode.
-
-The full answer test transfers the `late10` signal. At `32768`, all-layer SVA had answer NLL delta `0.152243`, KL `1.560773`, and logit cosine `0.744593`. The `late10` socket reached answer NLL delta `-0.001995`, KL `0.028690`, and logit cosine `0.999246`, while keeping the SVA-layer exact read reduction at `16x`. At `16384`, `sparse6` was best on gold answer NLL, while `late10` was best on distribution preservation, so the next run is a late-layer boundary sweep.
-
-The late-boundary sweep moves the current socket target to `late4`. Replacing only layers `26-29` gave the lowest KL at both tested contexts: at `32768`, answer NLL delta `0.023928`, KL `0.005527`, top-1 agreement `1.000000`, and logit cosine `0.999898`. Larger late sockets sometimes improved gold answer NLL, but they drifted farther from full attention. The next run tests `late4` across multiple passkeys and passkey placements.
-
-The `late4` robustness run held across 9 passkey cases at `32768` using three keys and start/middle/end placements. Aggregate answer NLL delta was `0.010875`, KL `0.005547`, top-1 agreement `0.968254`, and logit cosine `0.999889`. This makes the current production hypothesis compact: preserve full attention through layer `25`, socket SVA into layers `26-29`, and focus implementation work on replacing scan summon with an indexed path.
-
-The direct `early26` pressure check confirms that boundary. At `32768`, replacing layers `0-25` alone produced answer KL `1.531219` and logit cosine `0.745349`, nearly the same distribution drift as replacing all layers (`KL=1.562648`, cosine `0.743596`). Replacing only `26-29` stayed close to full attention (`KL=0.005527`, cosine `0.999898`) and reduced decode wall-clock in this scan harness, while prefill remained slower. The production path is therefore late-layer SVA plus faster summon, while early-layer replacement needs direct long-context/logit-preserving training to be worth reopening.
-
-The late4 budget squeeze shows real headroom. At `32768`, `4096/1024` kept KL to `0.013036` with `32x` fewer decode exact/value reads in the SVA layers, and `2048/512` kept KL to `0.022243` with `64x` fewer reads. Even `512/128` preserved gold-answer NLL on this case, though KL rose to `0.085656`. Decode was faster than full attention for every late4 budget row in this scan harness; prefill remained slower because scan summon still traverses the context. This makes `512/128` or `1024/256` the right fine-tuning target.
-
-The first SVA-active fine-tuning probe is positive. Training `110592` tiny residual-adapter parameters on top of late4 SVA at `512/128` for 24 steps against full-attention final-prompt logits cut held-out 32K KL from `0.045040` to `0.009248`, improved top-1 agreement from `0.666667` to `1.000000`, and raised logit cosine from `0.998986` to `0.999712`. The harness now saves the learned adapter as a reusable bundle at `results/hf_artifacts/sva-late4-512x128-adapter-v1`.
-
-The saved-adapter full answer-decode panel kept the adaptation signal, but the gain is smaller than the final-prompt result. On 9 held-out 32K passkey cases at `512/128`, unadapted SVA reached answer KL `0.080839`, top-1 agreement `0.809524`, and logit cosine `0.998957`; adapted SVA improved those to KL `0.070306`, top-1 `0.825397`, and cosine `0.999289`, with the same `256x` decode exact-read reduction in the SVA layers. That result motivated answer-token decode distillation over multiple keys and placements.
-
-Answer-token distillation is the strongest tight-budget fidelity result so far. Training the same adapter on all answer-token logits cut held-out answer-token KL from `0.052571` to `0.019472`. On the 9-case full answer-decode panel, unadapted `512/128` SVA reached answer KL `0.080789`, top-1 `0.809524`, and cosine `0.998958`; answer-distilled SVA improved those to KL `0.027706`, top-1 `0.920635`, and cosine `0.999429` at the same `256x` decode exact-read reduction. Gold-answer NLL moved from `-0.012770` versus full to `+0.065083`.
-
-Combining answer-token KL with a small gold-answer CE term is the strongest tight-budget adaptation result so far. With objective `answer_KL + 0.01 * gold_CE`, held-out answer-token KL landed at `0.020634`, close to pure answer-token distillation. On the 9-case full answer-decode panel, the combined adapter improved over unadapted `512/128` SVA from answer KL `0.080711` to `0.030835`, top-1 `0.809524` to `0.936508`, cosine `0.998966` to `0.999417`, and gold-answer NLL delta `-0.013716` to `-0.505290`, while preserving the same `256x` decode exact-read reduction. The next target is a CE-weight sweep around `0.01`.
-
-The answer-KL+CE adapter also held on a broader 24-case held-out panel with eight unseen keys across start/middle/end placements at `32768`. Unadapted `512/128` late4 SVA reached answer KL `0.096806`, top-1 `0.851190`, cosine `0.998147`, and NLL delta `-0.029969`; the CE001 adapter reached answer KL `0.031916`, top-1 `0.946429`, cosine `0.999103`, and NLL delta `-0.474124`, still at the same `256x` decode exact-read reduction. Wall-clock remains scan-summon dominated, so the next production step is indexed/cached summon against this quality target.
-
-The first indexed-summon check on that same 24-case panel is quality-credible but slower in the current PyTorch path. With inverted decode at `16` cells/subspace, the CE001 adapter reached answer KL `0.032604`, top-1 `0.922619`, cosine `0.999239`, and NLL delta `-0.434830`; at `32` cells/subspace it reached KL `0.028585`, top-1 `0.898810`, cosine `0.999453`, and NLL delta `-0.320555`. Decode slowdown was about `3.3x` versus full attention, worse than the scan row's `1.82x`, because the posting-list union still summons thousands of candidates before exact verification. The next test tightens indexed budgets to `4` and `8` cells/subspace.
-
-The tighter indexed check shows the current speed wall is implementation-side. At `8` cells/subspace, CE001 reached answer KL `0.038735`, top-1 `0.910714`, cosine `0.992045`, and NLL delta `-0.425858`; at `4`, KL drifted to `0.082317` and cosine to `0.989791` while NLL delta stayed strong at `-0.452635`. Decode slowdown stayed near `3.1x` in both settings, even though decode summoned counts fell sharply, so the bottleneck is now the Python/posting-list/gather path rather than verifier reads. The next test is `1` and `2` cells/subspace as an overhead floor.
-
-The `1/2` cells overhead-floor run confirms the wall-clock target. At `2` cells/subspace, CE001 reached KL `0.088524`, top-1 `0.886905`, cosine `0.998575`, and NLL delta `-0.710121`; at `1`, KL drifted to `0.166606` and top-1 to `0.821429`. Decode slowdown stayed around `3.0-3.3x`, so shrinking the posting-list union alone will not make the current inverted path fast. The next implementation is a vectorized/static candidate builder that removes per-head Python loops and full candidate-list deduplication, then retests the quality-relevant `8/16` cells settings.
-
-The static inverted decode path is the first wall-clock improvement on indexed summon. At `16` cells/subspace, CE001 reached KL `0.034456`, top-1 `0.910714`, cosine `0.999215`, and NLL delta `-0.435238`, with decode slowdown reduced from the old inverted `3.296342x` to `1.872479x`. At `8` cells/subspace, KL was `0.040815`, top-1 `0.916667`, cosine `0.991645`, and decode slowdown `2.276378x`. The current best wall-clock target is `16` cells/subspace with a verifier-ready retrieval path: fixed candidate tensors, duplicate refill before verification, and separate timing for catalog lookup, exact scoring, value gather, and value aggregation.
-
-Static inverted refill makes the verifier accounting clean. The adapter now takes a larger low-rank refill pool, drops duplicate token ids before exact verification, and emits a fixed-width unique candidate tensor. On the same 24-case 32K panel, `8` cells/subspace improved to KL `0.038739`, top-1 `0.910714`, cosine `0.992043`, NLL delta `-0.427092`, decode slowdown `2.006075x`, and `126.589` verified tokens on a nominal `128` budget. At `16`, KL improved to `0.032605` and top-1 to `0.922619`, with `127.543` verified tokens, but decode slowdown rose to `2.319209x`. The current speed target is therefore `8` cells/subspace with refill; the next bottleneck is the refill/top-k candidate construction path.
-
-Component profiling found the larger wall-clock cost around static decode: per-token key-catalog/posting maintenance. On a 6-case profiling slice before tail buffering, adapted `8`-cell static SVA spent `1.299869 ms` in the static verifier body, `0.140379 ms` in projection, `3.363141 ms` updating the key catalog/postings, and `4.955802 ms` total per patched layer call. Tail buffering now keeps prompt postings fixed during decode, adds generated-tail tokens as direct candidates, and rebuilds static postings in chunks. On the same slice, key-catalog time fell to `2.095516 ms`, outer total to `3.611595 ms`, and decode slowdown to `1.532751x`. Moving SVA projections/codebooks to device-ready float32 buffers at patch time cut the profiling-slice adapted outer total again to `3.211059 ms`. Lazy product-code maintenance then stopped assigning product keys to every generated token during static decode; generated tokens stay visible through the direct tail path, and the catalog rebuilds every `64` generated tokens. On the same profile slice, key-catalog/posting update fell to `0.125164 ms`, outer total to `1.635716 ms`, and decode slowdown to `1.289989x`. Stable-sort refill replaced the pairwise duplicate matrix with a stable sort by token id; on the profile slice, adapted outer total fell again to `1.400587 ms`. On the full 24-case no-profile panel, adapted SVA preserved quality (`KL=0.038573`, top-1 `0.916667`, cosine `0.992171`, NLL delta `-0.429207`) while improving decode slowdown from the duplicate-refill baseline `2.006075x` to `1.292738x`; prefill slowdown remained `24.939882x`. The next systems target is a more kernel-shaped fixed candidate path, followed by prefill/catalog construction.
-
-The Lantern router test is the next lookup-geometry probe. It trains page-side write hooks and query-side route probes directly from full-attention top-key labels, then evaluates whether keys can write themselves into cells that future queries can probe with low candidate counts. This tests the "pages summon themselves" hypothesis more directly than unsupervised IVF or multi-write k-means cells.
-
-The first capacity-balanced Lantern run made the page-side idea operational but did not beat the lookup frontier. Hard per-cell write caps fixed the candidate explosion: aggregate rows now project from about `1.9k` to `68.8k` candidates at one million tokens. The recall curve is still weak in the useful low-thousands band: `2048 cells / 2 writes / 2 probes` reached `0.065755` recall at about `3.4k` projected candidates, and `2048 / 2 / 4` reached `0.142997` at about `6.3k`. The highest row, `512 / 8 / 4`, reached `0.475524` recall at about `68.8k`. The next Lantern step is training the router against capacity-constrained route alignment rather than training soft overlap and imposing hard capacity afterward.
-
-The route-alignment follow-up improved the curve a little but did not change the decision. With key/query alignment losses and stronger balance, `2048 / 2 / 2` rose to `0.075118` recall at about `3.6k` projected candidates, `1024 / 2 / 4` reached `0.231368` at about `12.3k`, and the widest `512 / 8 / 4` row reached `0.504433` at about `71.4k`. This is useful evidence, but it still trails the earlier IVF/PQ serving frontier in the low-thousands band. The next Lantern idea would need capacity-aware assignment in the training loop itself, likely a balanced/Sinkhorn-style relaxation; otherwise the mainline should stay on static inverted/PQ serving.
-
-## Files
-
-- `experiments/sva_kill_test.py`: standalone toy benchmark.
-- `experiments/sva_causal_sequence_test.py`: incremental causal-cache benchmark.
-- `experiments/sva_trainable_recall_test.py`: trainable modern-decoder recall benchmark.
-- `experiments/sva_pretrained_socket_test.py`: pretrained SmolLM2 attention-socket benchmark.
-- `experiments/sva_real_qk_address_sweep.py`: real-QK high-bit address sweep at the model's configured context window.
-- `experiments/sva_million_stream_sim.py`: million-token address-pressure simulation from real SmolLM2 8192-token Q/K samples.
-- `experiments/sva_learned_ranker_test.py`: learned compressed Q/K ranker test.
-- `experiments/sva_learned_lsh_lookup_test.py`: learned-ranker random-hyperplane LSH serving test.
-- `experiments/sva_learned_ivf_lookup_test.py`: learned-ranker IVF/centroid routing serving test.
-- `experiments/sva_learned_multiwrite_ivf_lookup_test.py`: learned-ranker multi-write IVF serving test.
-- `experiments/sva_supervised_query_router_test.py`: learned-ranker supervised query-cell router serving test.
-- `experiments/sva_pq_lookup_test.py`: product-quantized learned-ranker lookup test.
-- `experiments/sva_pq_scan_benchmark.py`: synthetic million-token PQ scan throughput benchmark.
-- `experiments/sva_coarse_to_fine_pq_test.py`: coarse-to-fine product-quantized lookup test.
-- `experiments/sva_coarse_to_fine_pq_scan_benchmark.py`: synthetic million-token coarse-to-fine PQ scan throughput benchmark.
-- `experiments/sva_coarse_exact_rescore_benchmark.py`: synthetic million-token coarse PQ plus exact low-rank rescore benchmark.
-- `experiments/sva_supervised_coarse_pq_test.py`: supervised coarse-stage PQ lookup test.
-- `experiments/sva_deployment_socket_test.py`: frozen-artifact deployment proxy over simple text shifts.
-- `experiments/sva_full_deployment_benchmark.py`: held-out-document deployment benchmark with context and budget sweeps.
-- `experiments/sva_cached_decode_benchmark.py`: cached-key decode benchmark that separates lookup quality from full-socket harness overhead.
-- `experiments/sva_million_cached_decode_benchmark.py`: synthetic million-token cached-decode benchmark comparing full attention with SVA lookup variants.
-- `experiments/sva_8k_head_to_head_benchmark.py`: 8k full-attention versus SVA deployment benchmark with wall-clock and quality metrics.
-- `experiments/sva_inverted_adaptive_decode_benchmark.py`: cached-decode benchmark for inverted-code adaptive SVA lookup.
-- `experiments/sva_long_context_recall_sim.py`: long-context SVA recall proxy from real SmolLM2 Q/K activations and synthetic larger key banks.
-- `experiments/sva_passkey_language_benchmark.py`: passkey-style long-context language benchmark scoring the correct answer tokens after cached prefill.
-- `experiments/sva_block_elevator_benchmark.py`: block-first SVA benchmark that summons contiguous blocks and merges local softmax statements.
-- `experiments/sva_block_hybrid_benchmark.py`: token/block hybrid benchmark that routes each head/query between scattered token SVA and contiguous block SVA.
-- `experiments/sva_learned_hybrid_selector_benchmark.py`: learned selector benchmark for token/block SVA routing from cheap pre-verifier features.
-- `experiments/sva_evidence_haystack_benchmark.py`: passkey evidence survival benchmark that measures whether the summoner keeps the needed tokens as context grows, with optional anchor-aware rerank and neighborhood expansion.
-- `experiments/sva_span_statement_benchmark.py`: passkey span-statement benchmark that opens local spans around summoned evidence and compares selected-span output with full attention.
-- `experiments/sva_rotation_diagnostic.py`: low-rank rotation diagnostic that compares frozen product codebooks with refit identity and Hadamard-style codebooks.
-- `experiments/sva_codebook_refresh_benchmark.py`: held-out calibration-time codebook refresh benchmark for context-matched SVA catalogs.
-- `experiments/sva_late4_logit_distill.py`: SVA-active final-logit or answer-token distillation probe for tight-budget late4 sockets.
-- `experiments/sva_late4_adapter_answer_benchmark.py`: full answer-decode validation harness for a saved tight-budget late4 SVA adapter, including an unadapted SVA control.
-- `experiments/sva_lantern_router_test.py`: supervised page-side/write-hook router probe for sublinear candidate lookup.
-- `experiments/sva_artifact_io.py`: save/load helpers for portable frozen SVA artifact bundles.
-- `experiments/export_sva_artifact.py`: exporter for HF/GitHub-ready SVA artifact folders.
-- `experiments/export_refreshed_sva_artifact.py`: exporter that refreshes artifact coarse codebooks on a calibration stream while preserving the trained low-rank projections.
-- `experiments/sva_address_scaling.py`: address selectivity calculator for long contexts.
-- `sva/`: production-facing artifact loader and Llama attention adapter.
-- `demo/local_chat_server.py`: local HTML chat UI for SmolLM2 running with the exported SVA artifact.
-- `modal_h100_trainable.py`: Modal H100 runner for the trainable benchmark.
-- `modal_h100_socket.py`: Modal H100 runner for the pretrained socket sweep.
-- `modal_h100_three_stage_socket.py`: Modal H100 runner for the three-stage pretrained socket test.
-- `modal_h100_three_stage_socket_layers.py`: Modal H100 runner for layer-isolated three-stage socket tests.
-- `modal_h100_three_condition_socket.py`: Modal H100 runner for hidden-state, progressive, and selective-hybrid socket conditions.
-- `modal_h100_layer_frontier.py`: Modal H100 runner for selective socket layer-frontier tests.
-- `modal_h100_layer_cliff.py`: Modal H100 runner for selective socket cliff-mapping tests.
-- `modal_h100_layer_fallback.py`: Modal H100 runner for selective socket per-layer fallback tests.
-- `modal_h100_layer_admission.py`: Modal H100 runner for automatic selective socket admission screening.
-- `modal_h100_normfix_all_layers.py`: Modal H100 runner for all-layer socket tests after the attention-input normalization fix.
-- `modal_h100_deployment_socket.py`: Modal H100 runner for the frozen-artifact deployment proxy.
-- `modal_h100_full_deployment_benchmark.py`: Modal H100 runner for the held-out deployment benchmark.
-- `modal_h100_full_deployment_8192.py`: Modal H100 runner for the full-window 8192 held-out deployment benchmark.
-- `modal_h100_cached_decode_benchmark.py`: Modal H100 runner for the cached-key decode benchmark.
-- `modal_h100_million_cached_decode.py`: Modal H100 runner for synthetic million-token cached-decode throughput.
-- `modal_h100_tight_summon_frontier.py`: Modal H100 runner for the tight-shortlist quality/speed frontier.
-- `modal_h100_compact_summon_frontier.py`: Modal H100 runner for compact coarse-code quality/speed frontier sweeps.
-- `modal_h100_export_sva_artifact.py`: Modal H100 runner that exports the default `2x256` SVA artifact bundle to a Modal volume.
-- `modal_h100_export_refreshed_artifact.py`: Modal H100 runner that exports a long-context calibration-refreshed artifact bundle.
-- `modal_h100_export_attention_weighted_artifact.py`: Modal H100 runner that exports an attention-weighted long-context artifact bundle.
-- `modal_h100_8k_head_to_head.py`: Modal H100 runner for the 8k head-to-head deployment benchmark.
-- `modal_h100_inverted_adaptive_decode.py`: Modal H100 runner for adaptive inverted-code decode benchmarking.
-- `modal_h100_inverted_posting_decode.py`: Modal H100 runner for cached posting-list decode benchmarking.
-- `modal_h100_long_context_recall.py`: Modal H100 runner for the fixed-budget long-context recall proxy.
-- `modal_h100_long_context_scaleout.py`: Modal H100 runner for the long-context shortlist and budget scale-out proxy.
-- `modal_h100_passkey_language.py`: Modal H100 runner for adaptive inverted passkey language benchmarking.
-- `modal_h100_passkey_language_scan.py`: Modal H100 runner for fixed-scan passkey language benchmarking.
-- `modal_h100_passkey_language_scaleout.py`: Modal H100 runner for passkey shortlist and budget scale-out.
-- `modal_h100_passkey_profile_router.py`: Modal H100 runner for passkey language tests with context-routed SVA profiles.
-- `modal_h100_passkey_attention_weighted_router.py`: Modal H100 runner for passkey language tests with the attention-weighted long-context profile.
-- `modal_h100_attention_weighted_router_sweep.py`: Modal H100 runner for attention-weighted boost export plus passkey router sweeps.
-- `modal_h100_passkey_key_survival_profiles.py`: Modal H100 runner for profile-by-profile passkey key-survival diagnostics.
-- `modal_h100_passkey_prefill_drift_profiles.py`: Modal H100 runner for profile-by-profile passkey prefill-drift diagnostics.
-- `modal_h100_passkey_layer_selective_prefill.py`: Modal H100 runner for layer-selective passkey prefill-drift sweeps.
-- `modal_h100_passkey_layer_selective_language.py`: Modal H100 runner for layer-selective passkey answer sweeps.
-- `modal_h100_passkey_late_boundary_language.py`: Modal H100 runner for late-layer passkey answer boundary sweeps.
-- `modal_h100_passkey_late4_robustness.py`: Modal H100 runner for multi-key, multi-placement late4 passkey checks.
-- `modal_h100_passkey_early26_language.py`: Modal H100 runner for directly comparing `0-25`, all-layer, and `26-29` passkey answer drift.
-- `modal_h100_late4_budget_sweep.py`: Modal H100 runner for late4 passkey budget-squeeze sweeps.
-- `modal_h100_late4_logit_distill.py`: Modal H100 runner for tight-budget late4 final-logit distillation.
-- `modal_h100_late4_adapter_answer.py`: Modal H100 runner for full answer-decode validation of the saved tight-budget late4 adapter.
-- `modal_h100_late4_answer_distill.py`: Modal H100 runner for tight-budget late4 answer-token distillation.
-- `modal_h100_late4_answerdistill_adapter_answer.py`: Modal H100 runner for answer-decode validation of the answer-distilled late4 adapter.
-- `modal_h100_late4_answer_ce_distill.py`: Modal H100 runner for tight-budget late4 answer-token KL plus gold-CE distillation.
-- `modal_h100_late4_answerce_adapter_answer.py`: Modal H100 runner for answer-decode validation of the answer-KL+CE late4 adapter.
-- `modal_h100_late4_answerce_broad_panel.py`: Modal H100 runner for broader held-out validation of the answer-KL+CE late4 adapter.
-- `modal_h100_late4_answerce_inverted_panel.py`: Modal H100 runner for indexed-summon validation of the answer-KL+CE late4 adapter.
-- `modal_h100_lantern_router.py`: Modal H100 runner for supervised Lantern routing.
-- `modal_h100_block_elevator.py`: Modal H100 runner for block-first SVA elevator benchmarking.
-- `modal_h100_block_hybrid.py`: Modal H100 runner for token/block hybrid SVA benchmarking.
-- `modal_h100_learned_hybrid_selector.py`: Modal H100 runner for learned token/block selector benchmarking.
-- `modal_h100_evidence_haystack.py`: Modal H100 runner for passkey evidence survival benchmarking.
-- `modal_h100_evidence_rerank.py`: Modal H100 runner for evidence-aware rerank and neighborhood-expansion benchmarking.
-- `modal_h100_span_statement.py`: Modal H100 runner for passkey span-statement benchmarking.
-- `modal_h100_rotation_diagnostic.py`: Modal H100 runner for low-rank rotation diagnostics.
-- `modal_h100_codebook_refresh.py`: Modal H100 runner for held-out calibration-time codebook refresh.
-- `modal_h100_attention_weighted_refresh.py`: Modal H100 runner for attention-weighted held-out codebook refresh.
-- `modal_h100_refreshed_profile_recall.py`: Modal H100 runner for exported refreshed-profile recall sanity checks.
-- `modal_h100_million_stream.py`: Modal H100 runner for the million-token address-pressure simulation.
-- `modal_h100_learned_ranker.py`: Modal H100 runner for the learned compressed-ranker test.
-- `modal_h100_learned_ranker_generalize.py`: Modal H100 runner for the held-out-text ranker test.
-- `modal_h100_learned_lsh_lookup.py`: Modal H100 runner for learned-ranker LSH serving.
-- `modal_h100_learned_ivf_lookup.py`: Modal H100 runner for learned-ranker IVF serving.
-- `modal_h100_learned_multiwrite_ivf_lookup.py`: Modal H100 runner for learned-ranker multi-write IVF serving.
-- `modal_h100_supervised_query_router.py`: Modal H100 runner for supervised query-cell router serving.
-- `modal_h100_supervised_query_router_hires.py`: Modal H100 runner for high-resolution supervised query-cell router serving.
-- `modal_h100_pq_lookup.py`: Modal H100 runner for product-quantized learned-ranker lookup.
-- `modal_h100_pq_scan_benchmark.py`: Modal H100 runner for PQ scan throughput.
-- `modal_h100_coarse_to_fine_pq.py`: Modal H100 runner for coarse-to-fine PQ lookup.
-- `modal_h100_coarse_to_fine_pq_scan_benchmark.py`: Modal H100 runner for coarse-to-fine PQ scan throughput.
-- `modal_h100_coarse_exact_rescore_benchmark.py`: Modal H100 runner for coarse PQ plus exact low-rank rescore throughput.
-- `modal_h100_supervised_coarse_pq.py`: Modal H100 runner for supervised coarse-stage PQ lookup.
-- `modal_h100_supervised_coarse_pq_attention16.py`: Modal H100 runner for supervised coarse PQ with attention top-16 labels.
-- `modal_h100_weighted_coarse_pq.py`: Modal H100 runner for attention-weighted coarse PQ in the fine-ranker space.
-- `modal_h100_weighted_supervised_coarse_pq.py`: Modal H100 runner for attention-weighted codebooks in a supervised coarse space.
-- `modal_h100_weighted_supervised_coarse_pq_tight.py`: Modal H100 runner for tight-shortlist weighted supervised coarse PQ.
-- `modal_h100_hard_supervised_coarse_pq.py`: Modal H100 runner for hard-negative supervised coarse PQ.
-- `modal_h100_hard_pool_sweep.py`: Modal H100 runner for hard-negative pool-size sweep.
-- `modal_h100_hard_handoff.py`: Modal H100 runner for hard-negative handoff diagnostics.
-- `scripts/start_modal_h100_background.ps1`: detached Modal launcher that writes run logs under `results/modal_runs/`.
-- `results/verification_snapshot_2026-05-13.md`: current kill-test results.
-- `results/trainable_recall_snapshot_2026-05-13.md`: H100 trainable-representation checkpoint.
-- `results/pretrained_socket_snapshot_2026-05-13.md`: SmolLM2 pretrained socket checkpoint.
-- `results/pretrained_long_socket_snapshot_2026-05-13.md`: longer-context SmolLM2 socket checkpoint.
-- `results/pretrained_prefilter_socket_snapshot_2026-05-13.md`: cheap-prefilter socket checkpoint.
-- `results/real_qk_address_8192_snapshot_2026-05-13.md`: SmolLM2 full-window real-QK address sweep.
-- `results/million_stream_snapshot_2026-05-13.md`: million-token address-pressure snapshot.
-- `results/learned_ranker_snapshot_2026-05-13.md`: learned compressed-ranker snapshot.
-- `results/learned_ranker_generalization_snapshot_2026-05-13.md`: held-out-text learned ranker snapshot.
-- `results/learned_lsh_lookup_snapshot_2026-05-13.md`: learned-ranker LSH lookup snapshot.
-- `results/learned_ivf_lookup_snapshot_2026-05-13.md`: learned-ranker IVF lookup snapshot.
-- `results/learned_multiwrite_ivf_lookup_snapshot_2026-05-13.md`: learned-ranker multi-write IVF lookup snapshot.
-- `results/supervised_query_router_snapshot_2026-05-13.md`: supervised query-cell router lookup snapshot.
-- `results/supervised_query_router_hires_snapshot_2026-05-13.md`: high-resolution supervised query-cell router lookup snapshot.
-- `results/pq_lookup_snapshot_2026-05-13.md`: product-quantized learned-ranker lookup snapshot.
-- `results/pq_scan_benchmark_snapshot_2026-05-13.md`: synthetic million-token PQ scan throughput snapshot.
-- `results/coarse_to_fine_pq_snapshot_2026-05-13.md`: coarse-to-fine PQ lookup snapshot.
-- `results/coarse_to_fine_pq_scan_benchmark_snapshot_2026-05-13.md`: synthetic million-token coarse-to-fine PQ scan throughput snapshot.
-- `results/coarse_exact_rescore_benchmark_snapshot_2026-05-13.md`: synthetic million-token coarse PQ plus exact low-rank rescore throughput snapshot.
-- `results/supervised_coarse_pq_snapshot_2026-05-13.md`: supervised coarse-stage PQ lookup snapshot.
-- `results/supervised_coarse_pq_attention16_snapshot_2026-05-13.md`: supervised coarse PQ with attention top-16 labels snapshot.
-- `results/weighted_coarse_pq_snapshot_2026-05-13.md`: attention-weighted coarse PQ codebook snapshot.
-- `results/weighted_supervised_coarse_pq_snapshot_2026-05-13.md`: weighted codebooks in supervised coarse space snapshot.
-- `results/weighted_supervised_coarse_pq_tight_snapshot_2026-05-13.md`: tight-shortlist weighted supervised coarse PQ snapshot.
-- `results/hard_supervised_coarse_pq_snapshot_2026-05-13.md`: hard-negative supervised coarse PQ snapshot.
-- `results/hard_pool_sweep_snapshot_2026-05-13.md`: hard-negative mining-pool sweep snapshot.
-- `results/hard_handoff_snapshot_2026-05-13.md`: hard-negative handoff diagnostic snapshot.
-- `results/three_stage_socket_snapshot_2026-05-13.md`: three-stage socket and layer-isolation snapshot.
-- `results/three_condition_socket_snapshot_2026-05-13.md`: hidden-state, progressive, and selective-hybrid socket comparison.
-- `results/layer_frontier_snapshot_2026-05-13.md`: selective socket layer-frontier snapshot.
-- `results/layer_cliff_snapshot_2026-05-13.md`: selective socket cliff-mapping snapshot.
-- `results/layer_fallback_snapshot_2026-05-13.md`: selective socket per-layer fallback snapshot.
-- `results/layer_admission_snapshot_2026-05-13.md`: automatic selective socket admission snapshot.
-- `results/normfix_socket_audit_snapshot_2026-05-13.md`: attention-input normalization fix and corrected all-layer socket snapshot.
-- `results/full_deployment_benchmark_snapshot_2026-05-14.md`: first held-out deployment benchmark snapshot.
-- `results/full_deployment_8192_snapshot_2026-05-14.md`: full-window 8192 held-out deployment benchmark snapshot.
-- `results/cached_decode_benchmark_snapshot_2026-05-14.md`: cached-key decode benchmark snapshot.
-- `results/million_cached_decode_benchmark_snapshot_2026-05-14.md`: synthetic million-token cached-decode throughput snapshot.
-- `results/tight_summon_frontier_snapshot_2026-05-14.md`: tight-shortlist quality and million-token speed frontier snapshot.
-- `results/compact_summon_frontier_snapshot_2026-05-14.md`: compact coarse-code quality and million-token speed frontier snapshot.
-- `results/artifact_export_snapshot_2026-05-14.md`: first local deployable SVA artifact export snapshot.
-- `results/production_adapter_snapshot_2026-05-14.md`: first production-facing adapter and local chat demo snapshot.
-- `results/long_context_extension_snapshot_2026-05-14.md`: 8k head-to-head plus 128k/1M long-context recall extension snapshot.
-- `results/passkey_language_snapshot_2026-05-14.md`: first passkey-style language stress test for SVA decode policy.
-- `results/block_elevator_snapshot_2026-05-14.md`: block-first SVA elevator and local statement benchmark snapshot.
-- `results/block_hybrid_snapshot_2026-05-14.md`: token/block hybrid selector benchmark snapshot.
-- `results/learned_hybrid_selector_snapshot_2026-05-14.md`: learned token/block selector benchmark snapshot.
-- `results/evidence_haystack_snapshot_2026-05-14.md`: passkey evidence survival benchmark snapshot.
-- `results/evidence_rerank_snapshot_2026-05-14.md`: evidence-aware rerank and neighborhood-expansion snapshot.
-- `results/span_statement_snapshot_2026-05-14.md`: span-statement verifier benchmark snapshot.
-- `results/rotation_diagnostic_snapshot_2026-05-14.md`: low-rank rotation and codebook-fit diagnostic snapshot.
-- `results/codebook_refresh_snapshot_2026-05-14.md`: held-out calibration-time codebook refresh snapshot.
-- `results/refreshed_profile_snapshot_2026-05-14.md`: exported long-context refreshed artifact and recall sanity snapshot.
-- `results/passkey_profile_router_snapshot_2026-05-14.md`: language-facing passkey test for context-routed SVA profiles.
-- `results/attention_weighted_refresh_snapshot_2026-05-14.md`: held-out attention-weighted refresh benchmark snapshot.
-- `results/passkey_attention_weighted_router_snapshot_2026-05-14.md`: language-facing passkey test for the attention-weighted routed profile.
-- `results/attention_weighted_router_sweep_snapshot_2026-05-14.md`: mixed-strength attention-weighted routed profile sweep.
-- `results/passkey_key_survival_profiles_snapshot_2026-05-14.md`: final-query passkey evidence survival across routed profiles.
-- `results/passkey_prefill_drift_profiles_snapshot_2026-05-14.md`: final-prompt passkey prefill drift across routed profiles.
-- `results/passkey_layer_selective_prefill_snapshot_2026-05-14.md`: layer-selective final-prompt passkey prefill drift.
-- `results/passkey_layer_selective_language_snapshot_2026-05-14.md`: layer-selective full-answer passkey scoring.
-- `results/passkey_late_boundary_language_snapshot_2026-05-14.md`: late-layer boundary passkey answer sweep.
-- `results/passkey_late4_robustness_snapshot_2026-05-14.md`: multi-key, multi-placement late4 passkey robustness check.
-- `results/passkey_early26_language_snapshot_2026-05-14.md`: direct `0-25` versus all-layer versus `26-29` passkey answer comparison.
-- `results/late4_budget_sweep_snapshot_2026-05-14.md`: late4 32K passkey quality/cost sweep across tighter SVA budgets.
-- `results/late4_logit_distill_snapshot_2026-05-14.md`: first SVA-active tight-budget late4 final-logit distillation result.
-- `results/late4_adapter_answer_snapshot_2026-05-14.md`: saved-adapter full answer-decode validation with unadapted tight-budget SVA control.
-- `results/late4_answer_distill_snapshot_2026-05-14.md`: answer-token distillation and full answer-decode validation at tight late4 budget.
-- `results/late4_answer_ce_distill_snapshot_2026-05-14.md`: answer-token KL plus gold-CE distillation and full answer-decode validation at tight late4 budget.
-- `results/late4_answerce_broad_panel_snapshot_2026-05-14.md`: broader held-out validation of the answer-KL+CE late4 adapter.
-- `results/late4_answerce_inverted_panel_snapshot_2026-05-14.md`: indexed-summon validation of the answer-KL+CE late4 adapter.
-- `results/late4_answerce_inverted_tight_panel_snapshot_2026-05-14.md`: tighter `4/8` cells indexed-summon validation of the answer-KL+CE late4 adapter.
-- `results/late4_answerce_inverted_floor_panel_snapshot_2026-05-14.md`: `1/2` cells indexed-summon overhead-floor validation.
-- `results/late4_answerce_inverted_static_panel_snapshot_2026-05-14.md`: vectorized/static indexed-summon wall-clock validation.
-- `results/late4_answerce_inverted_static_refill_snapshot_2026-05-14.md`: duplicate-refill static indexed decode validation.
-- `results/late4_answerce_static_tail_profile_snapshot_2026-05-14.md`: component timing plus tail-buffered static indexed decode validation.
-- `results/lantern_router_capacity_snapshot_2026-05-14.md`: supervised page-side Lantern routing with capacity-balanced key writes.
-- `results/lantern_router_alignment_snapshot_2026-05-14.md`: route-aligned Lantern follow-up against the capacity-balanced baseline.
-- `results/hf_artifacts/sva-smollm2-135m-2x256-v1/`: local HF/GitHub-ready `2x256` SVA artifact bundle.
-- `results/hf_artifacts/sva-smollm2-135m-2x256-longctx-refresh-v1/`: local HF/GitHub-ready long-context refreshed `2x256` SVA artifact bundle.
-- `results/hf_artifacts/sva-smollm2-135m-2x256-attnweighted-v1/`: local HF/GitHub-ready attention-weighted long-context `2x256` SVA artifact bundle.
-- `results/hf_artifacts/sva-late4-512x128-adapter-v1/`: saved rank-16 residual adapter for late4 SVA at `512/128`.
-- `results/hf_artifacts/sva-late4-512x128-answerdistill-v1/`: saved rank-16 answer-token-distilled residual adapter for late4 SVA at `512/128`.
-- `results/hf_artifacts/sva-late4-512x128-answerdistill-ce001-v1/`: saved rank-16 answer-KL+CE residual adapter for late4 SVA at `512/128`.
-- `notes/attention_replacement_findings.md`: broader research log leading to SVA.
-- `notes/hierarchical_tree_sva.md`: side-track notes for hierarchical chunk/tree SVA.
-- `notes/million_token_scaling.md`: scaling target for million-token contexts.
-- `side_tracks/full_sva_finetune_20m.md`: side experiment plan for full-layer SVA continued pretraining on `20M` tokens over `3` epochs.
-
-## H100 Run
-
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-trainable
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-socket -ModalFile modal_h100_socket.py
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-three-stage-socket -ModalFile modal_h100_three_stage_socket.py
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-million-stream -ModalFile modal_h100_million_stream.py
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-learned-ranker -ModalFile modal_h100_learned_ranker.py
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-learned-ranker-generalize -ModalFile modal_h100_learned_ranker_generalize.py
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-learned-lsh-lookup -ModalFile modal_h100_learned_lsh_lookup.py
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-learned-ivf-lookup -ModalFile modal_h100_learned_ivf_lookup.py
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-learned-multiwrite-ivf-lookup -ModalFile modal_h100_learned_multiwrite_ivf_lookup.py
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-supervised-query-router -ModalFile modal_h100_supervised_query_router.py
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-supervised-query-router-hires -ModalFile modal_h100_supervised_query_router_hires.py
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-pq-lookup -ModalFile modal_h100_pq_lookup.py
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-pq-scan-benchmark -ModalFile modal_h100_pq_scan_benchmark.py
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-coarse-to-fine-pq -ModalFile modal_h100_coarse_to_fine_pq.py
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-coarse-to-fine-pq-scan-benchmark -ModalFile modal_h100_coarse_to_fine_pq_scan_benchmark.py
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-coarse-exact-rescore-benchmark -ModalFile modal_h100_coarse_exact_rescore_benchmark.py
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-supervised-coarse-pq -ModalFile modal_h100_supervised_coarse_pq.py
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-supervised-coarse-pq-attention16 -ModalFile modal_h100_supervised_coarse_pq_attention16.py
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-weighted-coarse-pq -ModalFile modal_h100_weighted_coarse_pq.py
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-weighted-supervised-coarse-pq -ModalFile modal_h100_weighted_supervised_coarse_pq.py
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-weighted-supervised-coarse-pq-tight -ModalFile modal_h100_weighted_supervised_coarse_pq_tight.py
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-hard-supervised-coarse-pq -ModalFile modal_h100_hard_supervised_coarse_pq.py
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-hard-pool-sweep -ModalFile modal_h100_hard_pool_sweep.py
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-hard-handoff -ModalFile modal_h100_hard_handoff.py
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-three-stage-socket-layers -ModalFile modal_h100_three_stage_socket_layers.py
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-three-condition-socket -ModalFile modal_h100_three_condition_socket.py
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-layer-frontier -ModalFile modal_h100_layer_frontier.py
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-layer-cliff -ModalFile modal_h100_layer_cliff.py
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-layer-fallback -ModalFile modal_h100_layer_fallback.py
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-layer-admission -ModalFile modal_h100_layer_admission.py
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-normfix-all-layers -ModalFile modal_h100_normfix_all_layers.py
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-deployment-socket -ModalFile modal_h100_deployment_socket.py
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-full-deployment-benchmark -ModalFile modal_h100_full_deployment_benchmark.py
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-full-deployment-8192 -ModalFile modal_h100_full_deployment_8192.py
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-cached-decode-benchmark -ModalFile modal_h100_cached_decode_benchmark.py
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-million-cached-decode -ModalFile modal_h100_million_cached_decode.py
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-tight-summon-frontier -ModalFile modal_h100_tight_summon_frontier.py
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-compact-summon-frontier -ModalFile modal_h100_compact_summon_frontier.py
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-export-artifact -ModalFile modal_h100_export_sva_artifact.py
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-export-refreshed-artifact -ModalFile modal_h100_export_refreshed_artifact.py
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-block-elevator -ModalFile modal_h100_block_elevator.py
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-block-hybrid -ModalFile modal_h100_block_hybrid.py
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-learned-hybrid-selector -ModalFile modal_h100_learned_hybrid_selector.py
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-evidence-haystack -ModalFile modal_h100_evidence_haystack.py
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-evidence-rerank -ModalFile modal_h100_evidence_rerank.py
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-passkey-profile-router -ModalFile modal_h100_passkey_profile_router.py
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-span-statement -ModalFile modal_h100_span_statement.py
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-rotation-diagnostic -ModalFile modal_h100_rotation_diagnostic.py
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-codebook-refresh -ModalFile modal_h100_codebook_refresh.py
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-attention-weighted-refresh -ModalFile modal_h100_attention_weighted_refresh.py
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-refreshed-profile-recall -ModalFile modal_h100_refreshed_profile_recall.py
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-export-attnweighted-artifact -ModalFile modal_h100_export_attention_weighted_artifact.py
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-passkey-attnweighted-router -ModalFile modal_h100_passkey_attention_weighted_router.py
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-attnweighted-router-sweep -ModalFile modal_h100_attention_weighted_router_sweep.py
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-passkey-key-survival-profiles -ModalFile modal_h100_passkey_key_survival_profiles.py
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-passkey-prefill-drift-profiles -ModalFile modal_h100_passkey_prefill_drift_profiles.py
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-passkey-layer-selective-prefill -ModalFile modal_h100_passkey_layer_selective_prefill.py
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-passkey-layer-selective-language -ModalFile modal_h100_passkey_layer_selective_language.py
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-passkey-late-boundary-language -ModalFile modal_h100_passkey_late_boundary_language.py
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-passkey-late4-robustness -ModalFile modal_h100_passkey_late4_robustness.py
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-late4-logit-distill -ModalFile modal_h100_late4_logit_distill.py
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-late4-adapter-answer -ModalFile modal_h100_late4_adapter_answer.py
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-late4-answer-distill -ModalFile modal_h100_late4_answer_distill.py
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-late4-answerdistill-adapter-answer -ModalFile modal_h100_late4_answerdistill_adapter_answer.py
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-late4-answer-ce-distill -ModalFile modal_h100_late4_answer_ce_distill.py
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-late4-answerce-adapter-answer -ModalFile modal_h100_late4_answerce_adapter_answer.py
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-late4-answerce-broad-panel -ModalFile modal_h100_late4_answerce_broad_panel.py
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-late4-answerce-inverted-panel -ModalFile modal_h100_late4_answerce_inverted_panel.py
-powershell -NoProfile -ExecutionPolicy Bypass -Command "& '.\scripts\start_modal_h100_background.ps1' -Name 'sva-h100-late4-answerce-inverted-tight-panel' -ModalFile 'modal_h100_late4_answerce_inverted_panel.py' -ModalArgs '--cells','4,8'"
-powershell -NoProfile -ExecutionPolicy Bypass -Command "& '.\scripts\start_modal_h100_background.ps1' -Name 'sva-h100-late4-answerce-inverted-static-panel' -ModalFile 'modal_h100_late4_answerce_inverted_panel.py' -ModalArgs '--cells','8,16','--summon-mode','inverted_static'"
-powershell -NoProfile -ExecutionPolicy Bypass -Command "& '.\scripts\start_modal_h100_background.ps1' -Name 'sva-h100-static-tail-full-panel' -ModalFile 'modal_h100_late4_answerce_inverted_panel.py' -ModalArgs '--cells','8','--summon-mode','inverted_static'"
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_modal_h100_background.ps1 -Name sva-h100-lantern-router -ModalFile modal_h100_lantern_router.py
+Run the no-download test suite and the standalone toy benchmark:
+
+```bash
+python -m unittest discover -s tests -v
+python experiments/sva_kill_test.py --task binding --trials 2 --tables 8 16 24 \
+    --bits 10 --budget 16 --query-noise 0.05 --logit-scale 16
 ```
 
-The launcher uses `modal run --detach` and writes local metadata, stdout, stderr, and result files under `results/modal_runs/`.
+The H100 sweeps behind the snapshots run on Modal via the `modal_h100_*.py` runners;
+see [`docs/h100_runbook.md`](docs/h100_runbook.md).
 
-Live progress is visible through Modal logs:
+## Repository map
 
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\watch_modal_h100.ps1 -Tail 200
+| Path | Contents |
+| --- | --- |
+| `sva/` | Production package: artifact loading/validation (`artifacts.py`), reversible Llama attention patching with scan and static-inverted cached decode (`llama.py`), lookup ops (`ops.py`), runtime read accounting (`stats.py`) |
+| `tests/` | No-download unit tests for the adapter (tiny random Llama + tiny bundle) |
+| `demo/` | Local browser chat server running SmolLM2 with the SVA artifact |
+| `experiments/` | 41 standalone benchmark harnesses — see [`experiments/README.md`](experiments/README.md) for script → question → key result |
+| `modal_h100_*.py` (root) | Modal H100 runners, one per sweep, each wrapping an `experiments/` harness |
+| `results/hf_artifacts/` | Frozen artifact bundles (3 full `2x256` profiles for SmolLM2-135M) and 3 late4 512/128 residual adapters |
+| `docs/snapshots/` | 80 dated result snapshots with full configs — [indexed by phase](docs/snapshots/README.md) |
+| `docs/research_log.md` | The chronological narrative, including negative results |
+| `docs/h100_runbook.md` | Modal launch commands |
+| `notes/`, `side_tracks/` | Pre-SVA findings, million-token scaling targets, hierarchical-tree and tree-sitter side tracks |
+| `scripts/` | PowerShell Modal launchers (this work ran from a Windows host) |
+
+## Limitations
+
+- **One model, one scale.** Everything language-facing is SmolLM2-135M-Instruct.
+  Nothing here is verified on larger models, other families, or GQA configurations
+  beyond SmolLM2's.
+- **Quality at 32k+ is layer-selective.** All-layer replacement is only verified
+  lossless to 8192 tokens (the model's configured window). At 32k the verified result
+  is the late4 socket; early-layer replacement at long context is an open problem that
+  would need long-context training.
+- **Million-token numbers are synthetic.** The 0.65-1.0 ms lookups and the 1M-key
+  recall figures use synthetic caches; no end-to-end million-token language run exists.
+  At 1M keys the frozen 8k artifact's recall drops to `0.645` even at 16384/2048, so
+  catalog capacity is the open method problem.
+- **Wall-clock wins are decode-side and setting-specific.** With stock PyTorch, decode
+  is faster than full attention at million-token scale (q=1-4) and in the 32k late4
+  scan harness, but the 8k all-layer adapter is slower than optimized full attention,
+  batched queries (q=16) lose, and **prefill is 25x slower** in the static-inverted
+  socket because summon still traverses the context. No fused/custom kernel exists yet.
+- **Passkey-shaped evaluation.** Long-context language results are passkey retrieval
+  panels (up to 24 held-out cases), not broad benchmarks. Held-out-document perplexity
+  results exist only to 8192.
+- **Snapshots are point-in-time.** Earlier snapshots' interpretations are sometimes
+  revised by later ones (kept deliberately; the index flags the stale ones).
+
+## Citing and contact
+
+If you use SVA or build on these results:
+
+```bibtex
+@misc{hill2026sva,
+  author = {Hill, Alex},
+  title  = {Summon-Verify Attention: content-addressed sparse attention where pages summon themselves},
+  year   = {2026},
+  url    = {https://github.com/asystemoffields/sva}
+}
 ```
+
+Issues and discussions on this repository are the best contact channel
+(GitHub: [asystemoffields](https://github.com/asystemoffields)).
